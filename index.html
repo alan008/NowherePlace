@@ -2945,9 +2945,19 @@
       nodes: [input, filter, output, convolver, reverb, delay, feedback, echo] };
   }
 
+  function holdMusicGain(parameter, time) {
+    if (typeof parameter.cancelAndHoldAtTime === 'function') {
+      parameter.cancelAndHoldAtTime(time);
+      return;
+    }
+    const value = parameter.value;
+    parameter.cancelScheduledValues(time);
+    parameter.setValueAtTime(value, time);
+  }
+
   function retireMusicBus(bus) {
     const now = music.context.currentTime;
-    bus.output.gain.cancelAndHoldAtTime(now);
+    holdMusicGain(bus.output.gain, now);
     bus.output.gain.linearRampToValueAtTime(0, now + 1.65);
     bus.stopAt = now + 1.8;
     music.retiring.push(bus);
@@ -3138,7 +3148,7 @@
         await music.context.resume();
         changeMusicSeason();
         const now = music.context.currentTime;
-        music.master.gain.cancelAndHoldAtTime(now);
+        holdMusicGain(music.master.gain, now);
         music.master.gain.linearRampToValueAtTime(music.volume, now + 0.12);
         if (!music.timer) music.timer = setInterval(scheduleMusic, 25);
         scheduleMusic();
@@ -3146,12 +3156,13 @@
         clearInterval(music.timer);
         music.timer = null;
         const now = music.context.currentTime;
-        music.master.gain.cancelAndHoldAtTime(now);
+        holdMusicGain(music.master.gain, now);
         music.master.gain.linearRampToValueAtTime(0, now + 0.06);
         await new Promise(resolve => setTimeout(resolve, 75));
         await music.context.suspend();
       }
-    }).catch(() => {
+    }).catch(error => {
+      console.error('Не удалось включить музыку', error);
       music.enabled = false;
       clearInterval(music.timer);
       music.timer = null;
