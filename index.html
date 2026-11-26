@@ -257,6 +257,7 @@
   const DAY_SECONDS = 360;
   const DAY_MINUTES = 1440;
   const START_HOUR = 7.8;
+  const FRAME_INTERVAL = 1000 / 30;
   const byId = id => document.getElementById(id);
   const canvas = byId('landscape');
   const ctx = canvas.getContext('2d', { alpha: false });
@@ -286,10 +287,10 @@
   const shadowContext = shadowCanvas.getContext('2d');
   const cloudCanvas = makeCanvas(W, SKY_HEIGHT);
   const cloudContext = cloudCanvas.getContext('2d');
-  const festivalCanvas = makeCanvas();
-  const festivalContext = festivalCanvas.getContext('2d');
-  const windowLightCanvas = makeCanvas();
-  const windowLightContext = windowLightCanvas.getContext('2d');
+  const actorSpritePool = [];
+  let actorSprites = new WeakMap();
+  let actorSpriteCandidates = new WeakSet();
+  let actorSpriteCount = 0;
   const ui = byId('interface');
   const interfaceToggle = byId('ui-toggle');
   const touchInterface = window.matchMedia('(pointer: coarse), (max-width: 680px)');
@@ -1635,7 +1636,8 @@
 
   function drawFestivalLights(world, actors, motion, darkness) {
     const tree = world.festivalTree;
-    const g = festivalContext;
+    const region = world.foregroundMasks.get(tree);
+    const g = region.lightContext;
     if (!tree.glows) {
       tree.glows = festiveColors.map(color => {
         const glow = makeCanvas(13, 13);
@@ -1650,7 +1652,7 @@
         return glow;
       });
     }
-    g.clearRect(0, 0, W, H);
+    g.clearRect(region.left, region.top, region.width, region.height);
     for (let pool = 0; pool < 3; pool++) {
       const bulb = tree.lights[tree.lights.length - 1 - pool * 3];
       const strength = garlandBrightness(bulb, motion);
@@ -1684,30 +1686,87 @@
     g.globalAlpha = 0.6 * darkness;
     blit(g, tree.glows[3], tree.x + tree.bend - 6, tree.y - tree.height - 8);
     g.globalAlpha = 1;
-    maskForeground(g, world, actors, tree.y, motion);
-    blit(landContext, festivalCanvas, 0, 0);
+    maskForeground(g, world, actors, tree, motion);
+    blit(landContext, region.lightCanvas, region.left, region.top);
+  }
+
+  function intersects(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  }
+
+  function houseLightStrength(house, hour) {
+    return Math.max(smooth((hour - house.litAt) / 0.75), 1 - smooth((hour - house.goesDark) / 0.6));
+  }
+
+  function beginActorFrame(world, actors, hour) {
+    actorSprites = new WeakMap();
+    actorSpriteCandidates = new WeakSet();
+    actorSpriteCount = 0;
+    const sources = world.houses.filter(house => house.style !== 'shed' && houseLightStrength(house, hour) > 0);
+    if (season === 'winter') sources.push(world.festivalTree);
+    if (!sources.length) return;
+    for (const actor of actors) {
+      if (actor.alpha < 0.01) continue;
+      const bounds = actorBounds(actor);
+      if (sources.some(source => actor.y > source.y && intersects(bounds, world.foregroundMasks.get(source)))) {
+        actorSpriteCandidates.add(actor);
+      }
+    }
+  }
+
+  function lightBounds(item) {
+    let left = W, top = H, right = 0, bottom = 0;
+    const include = (x, y, rx, ry) => {
+      left = Math.min(left, x - rx); right = Math.max(right, x + rx);
+      top = Math.min(top, y - ry); bottom = Math.max(bottom, y + ry);
+    };
+    if (item.kind === 'festivalTree') {
+      include(item.x, item.y + 3, 41, 11);
+      include(item.x + item.bend, item.y - item.height - 2, 8, 8);
+      for (const bulb of item.lights) include(bulb.x, bulb.y, 8, 8);
+    } else {
+      const d = dimensions(item);
+      include(item.x + item.face * (d.left + 6) - 1, item.y + 4, 19, 7);
+      for (const {x, y, w, h} of houseWindows(item, d)) {
+        include(item.x + item.face * (x + w / 2), item.y + y + h / 2,
+          Math.max(w + 3, w * 1.5) + 2, Math.max(h + 3, h * 1.5) + 2);
+      }
+    }
+    left = clamp(Math.floor(left), 0, W - 1); top = clamp(Math.floor(top), 0, H - 1);
+    right = clamp(Math.ceil(right), left + 1, W); bottom = clamp(Math.ceil(bottom), top + 1, H);
+    return {left, top, right, bottom, width: right - left, height: bottom - top};
   }
 
   function buildForegroundMasks(world, sprites) {
-    const depths = new Set(world.houses.map(house => house.y));
-    if (season === 'winter') depths.add(world.festivalTree.y);
-    return new Map([...depths].map(depth => {
-      const mask = makeCanvas();
+    const sources = world.houses.filter(house => house.style !== 'shed');
+    if (season === 'winter') sources.push(world.festivalTree);
+    return new Map(sources.map(source => {
+      const bounds = lightBounds(source);
+      const mask = makeCanvas(bounds.width, bounds.height);
       const g = mask.getContext('2d');
+      g.translate(-bounds.left, -bounds.top);
       for (const sprite of sprites) {
-        if (sprite.y > depth) blit(g, sprite.canvas, sprite.left, sprite.top);
+        const spriteBounds = {left: sprite.left, top: sprite.top,
+          right: sprite.left + sprite.canvas.logicalWidth, bottom: sprite.top + sprite.canvas.logicalHeight};
+        if (sprite.y > source.y && intersects(bounds, spriteBounds)) blit(g, sprite.canvas, sprite.left, sprite.top);
       }
-      return [depth, mask];
+      const lightCanvas = makeCanvas(bounds.width, bounds.height);
+      const lightContext = lightCanvas.getContext('2d');
+      lightContext.translate(-bounds.left, -bounds.top);
+      return [source, {...bounds, canvas: mask, lightCanvas, lightContext}];
     }));
   }
 
-  function maskForeground(g, world, actors, depth, motion) {
+  function maskForeground(g, world, actors, source, motion) {
+    const region = world.foregroundMasks.get(source);
+    g.save();
+    g.globalAlpha = 1;
     g.globalCompositeOperation = 'destination-out';
-    blit(g, world.foregroundMasks.get(depth), 0, 0);
+    blit(g, region.canvas, region.left, region.top);
     for (const actor of actors) {
-      if (actor.y > depth) drawGroundActor(g, actor, motion);
+      if (actor.y > source.y && intersects(region, actorBounds(actor))) drawGroundActor(g, actor, motion);
     }
-    g.globalCompositeOperation = 'source-over';
+    g.restore();
   }
 
   function paintLand(world, palette) {
@@ -2152,6 +2211,7 @@
     drawLandLayer(layers, light, 'terrain');
     drawFlocks(landContext, world, hour, motion, weather, sun, moon);
     const actors = groundPopulation(world, motion, hour);
+    beginActorFrame(world, actors, hour);
     updateFootprints(world, actors, motion);
     drawFootprints(landContext, world, motion);
     drawCastShadows(world, sun);
@@ -2211,9 +2271,11 @@
 
     for (const house of world.houses) {
       if (house.style === 'shed') continue;
-      const strength = Math.max(smooth((hour - house.litAt) / 0.75), 1 - smooth((hour - house.goesDark) / 0.6));
+      const strength = houseLightStrength(house, hour);
       if (strength <= 0) continue;
-      windowLightContext.clearRect(0, 0, W, H);
+      const region = world.foregroundMasks.get(house);
+      const {lightCanvas: windowLightCanvas, lightContext: windowLightContext} = region;
+      windowLightContext.clearRect(region.left, region.top, region.width, region.height);
       const d = dimensions(house);
       const groundX = house.x + house.face * (d.left + 6);
       for (let ring = 3; ring >= 1; ring--) {
@@ -2236,8 +2298,8 @@
       }
       windowLightContext.restore();
       windowLightContext.globalAlpha = 1;
-      maskForeground(windowLightContext, world, actors, house.y, motion);
-      blit(ctx, windowLightCanvas, 0, 0);
+      maskForeground(windowLightContext, world, actors, house, motion);
+      blit(ctx, windowLightCanvas, region.left, region.top);
     }
 
     if (weather.rain > 0.02) {
@@ -2722,7 +2784,44 @@
       sleeping: night > 0.7, alpha: 1 };
   }
 
+  function actorBounds(actor) {
+    const x = actor.x, y = actor.kind === 'leafParticle' ? actor.leafY : actor.y;
+    const scale = mix(0.58, 1.02, clamp((actor.y - 151) / 110));
+    const width = actor.kind === 'leafParticle' ? 4 : actor.kind === 'fire' ? 12 : 17 * scale + 3;
+    const height = actor.kind === 'leafParticle' ? 4 : actor.kind === 'fire' ? 26 : 28 * scale + 3;
+    const left = Math.floor(x - width), right = Math.ceil(x + width);
+    const top = Math.floor(y - height), bottom = Math.ceil(y + (actor.kind === 'leafParticle' ? 4 : 7));
+    return {left, top, right, bottom, width: right - left, height: bottom - top};
+  }
+
   function drawGroundActor(g, actor, motion) {
+    if (actor.alpha < 0.01) return;
+    if (!actorSpriteCandidates.has(actor)) return paintGroundActor(g, actor, motion);
+    let sprite = actorSprites.get(actor);
+    if (!sprite) {
+      const bounds = actorBounds(actor);
+      let slot = actorSpritePool[actorSpriteCount];
+      if (!slot) {
+        const surface = makeCanvas(Math.ceil(bounds.width / 8) * 8, Math.ceil(bounds.height / 8) * 8);
+        slot = actorSpritePool[actorSpriteCount] = {canvas: surface, context: surface.getContext('2d')};
+      } else if (slot.canvas.logicalWidth < bounds.width || slot.canvas.logicalHeight < bounds.height) {
+        prepareSurface(slot.canvas, Math.max(slot.canvas.logicalWidth, Math.ceil(bounds.width / 8) * 8),
+          Math.max(slot.canvas.logicalHeight, Math.ceil(bounds.height / 8) * 8));
+      }
+      actorSpriteCount++;
+      const paint = slot.context;
+      paint.clearRect(0, 0, slot.canvas.logicalWidth, slot.canvas.logicalHeight);
+      paint.save();
+      paint.translate(-bounds.left, -bounds.top);
+      paintGroundActor(paint, actor, motion);
+      paint.restore();
+      sprite = {...bounds, canvas: slot.canvas};
+      actorSprites.set(actor, sprite);
+    }
+    blit(g, sprite.canvas, sprite.left, sprite.top);
+  }
+
+  function paintGroundActor(g, actor, motion) {
     if (renderMode === 'hd') return drawGroundActorHD(g, actor, motion);
     if (actor.alpha < 0.01) return;
     if (actor.kind === 'leafParticle') {
@@ -3730,16 +3829,18 @@
   }
 
   function desiredRenderScale() {
-    if (renderMode === 'pixel') return 1;
-    const display = Math.min(window.innerWidth / W, window.innerHeight / H);
-    return clamp(Math.ceil(display * (window.devicePixelRatio || 1)), 2, 4);
+    return renderMode === 'hd' ? 2 : 1;
   }
 
   function configureRenderer() {
     renderScale = desiredRenderScale();
     prepareSurface(canvas, W, H);
-    for (const surface of [landCanvas, shadowCanvas, festivalCanvas, windowLightCanvas]) prepareSurface(surface, W, H);
+    for (const surface of [landCanvas, shadowCanvas]) prepareSurface(surface, W, H);
     prepareSurface(cloudCanvas, W, SKY_HEIGHT);
+    actorSpritePool.length = 0;
+    actorSprites = new WeakMap();
+    actorSpriteCandidates = new WeakSet();
+    actorSpriteCount = 0;
     canvas.classList.toggle('hi-dpi', renderMode === 'hd');
     canvas.setAttribute('aria-label', (renderMode === 'hd' ? 'Рисованная' : 'Пиксельная') + ' лесная деревня с жителями, питомцами, лесными зверями, птицами, погодой и сменой суток');
     for (const button of document.querySelectorAll('[data-render]')) button.setAttribute('aria-pressed', String(button.dataset.render === renderMode));
@@ -4508,6 +4609,7 @@
   let weather;
   let frame = 0;
   let lastRender = 0;
+  let nextRender = 0;
 
   const currentWeather = () => weatherAt(world, simulatedMinutes / 60, weatherPicker.value, coverPicker.value);
 
@@ -4535,9 +4637,12 @@
   function tick(now) {
     frame = 0;
     const elapsed = now - lastRender;
-    if (elapsed >= 40) {
+    if (now + 0.5 >= nextRender) {
       const dt = Math.min(elapsed / 1000, 0.15);
       lastRender = now;
+      // Keep a fixed schedule instead of rounding every frame up to the next refresh.
+      const intervals = Math.max(1, Math.floor((now - nextRender + 0.5) / FRAME_INTERVAL) + 1);
+      nextRender += intervals * FRAME_INTERVAL;
       simulatedMinutes = wrap(simulatedMinutes + dt * DAY_MINUTES / DAY_SECONDS, DAY_MINUTES);
       motion += dt;
       const target = currentWeather();
@@ -4555,6 +4660,7 @@
     if (frame) cancelAnimationFrame(frame);
     frame = 0;
     lastRender = performance.now();
+    nextRender = lastRender + FRAME_INTERVAL;
     startClock();
   }
 
