@@ -1104,6 +1104,14 @@
     g.globalAlpha = 1;
   }
 
+  function pineTier(item, index, count, bend) {
+    const t = index / (count - 1);
+    const top = item.y - item.height + Math.round(item.height * t * 0.6);
+    return { x: item.x + Math.round(bend * (1 - t)), top,
+      bottom: top + Math.round(item.height * mix(0.28, 0.34, t)),
+      span: item.width * 0.5 * mix(0.26, 1, t) };
+  }
+
   function drawPine(g, item, palette, contact = true) {
     const { x, y, height: h, tint } = item;
     const half = item.width * 0.5;
@@ -1118,11 +1126,7 @@
 
     const layers = h > 44 ? 6 : h > 23 ? 5 : 4;
     for (let i = layers - 1; i >= 0; i--) {
-      const t = i / (layers - 1);
-      const apexX = x + Math.round(bend * (1 - t));
-      const apex = top + Math.round(h * t * 0.6);
-      const level = apex + Math.round(h * mix(0.28, 0.34, t));
-      const span = half * mix(0.26, 1, t);
+      const { x: apexX, top: apex, bottom: level, span } = pineTier(item, i, layers, bend);
       const left = apexX - span * between(random, 0.8, 1.06);
       const right = apexX + span * between(random, 0.9, 1.13);
       polygon(g, shade[0], [[apexX, apex], [right - span * 0.25, level - h * 0.075],
@@ -1470,17 +1474,13 @@
       }
       g.restore();
     } else if (item.kind === 'pine' || item.kind === 'festivalTree') {
-      const { x, y, height: h } = item;
+      const { height: h } = item;
       const half = item.width * 0.5;
       const random = randomFrom(item.seed);
       const bend = integer(random, -Math.ceil(half * 0.25), Math.ceil(half * 0.25));
       const layers = h > 44 ? 6 : h > 23 ? 5 : 4;
       for (let i = layers - 1; i >= 0; i--) {
-        const t = i / (layers - 1);
-        const cx = x + Math.round(bend * (1 - t));
-        const top = y - h + Math.round(h * t * 0.6);
-        const base = top + Math.round(h * mix(0.28, 0.34, t));
-        const span = half * mix(0.26, 1, t);
+        const { x: cx, top, bottom: base, span } = pineTier(item, i, layers, bend);
         polygon(g, snow[1], [[cx, top], [cx + span * 0.59, base - h * 0.07],
           [cx + span * 0.24, base - h * 0.10], [cx + span * 0.1, base - h * 0.07],
           [cx - span * 0.24, base - h * 0.1], [cx - span * 0.73, base - h * 0.06]]);
@@ -1517,27 +1517,34 @@
     const tree = { ...position, kind: 'festivalTree', height, width: height * 0.64, tint: 1,
       seed: integer(random, 1, 2 ** 30), lights: [], ornaments: [] };
     const half = tree.width * 0.5;
+    tree.bend = integer(randomFrom(tree.seed), -Math.ceil(half * 0.25), Math.ceil(half * 0.25));
     for (let row = 0; row < 6; row++) {
-      const level = 0.23 + row * 0.116;
+      const tier = pineTier(tree, row, 6, tree.bend);
       const count = 5 + row * 2;
       for (let bulb = 0; bulb < count; bulb++) {
         const u = mix(-1, 1, bulb / (count - 1));
         tree.lights.push({ row, index: tree.lights.length, color: (bulb + row * 2) % festiveColors.length,
-          x: Math.round(tree.x + u * half * level * 0.93),
-          y: Math.round(tree.y - height + height * level + (1 - u * u) * height * 0.036) });
+          x: Math.round(tier.x + u * tier.span * 0.58),
+          y: Math.round(tier.bottom - height * 0.068 + (1 - u * u) * height * 0.045 +
+            u * tree.bend * 0.13) });
       }
     }
     for (let i = 0; i < 27; i++) {
       const level = between(random, 0.22, 0.91);
-      tree.ornaments.push({ x: Math.round(tree.x + between(random, -0.72, 0.72) * half * level),
-        y: Math.round(tree.y - height + height * level), color: integer(random, 0, festiveColors.length - 1),
+      const y = tree.y - height + height * level;
+      let row = 0;
+      while (row < 5 && pineTier(tree, row, 6, tree.bend).bottom < y + 2) row++;
+      const tier = pineTier(tree, row, 6, tree.bend);
+      const width = tier.span * clamp((y - tier.top) / (tier.bottom - tier.top)) * 0.7;
+      tree.ornaments.push({ x: Math.round(tier.x + between(random, -0.72, 0.72) * width),
+        y: Math.round(y), color: integer(random, 0, festiveColors.length - 1),
         shape: i % 4, size: random() < 0.28 ? 2 : 1 });
     }
     return tree;
   }
 
   function drawTreeStar(g, tree, color) {
-    const x = tree.x;
+    const x = tree.x + tree.bend;
     const y = tree.y - tree.height - 2;
     polygon(g, color, [[x, y - 5], [x + 1, y - 1], [x + 5, y - 1], [x + 2, y + 1],
       [x + 3, y + 5], [x, y + 3], [x - 3, y + 5], [x - 2, y + 1], [x - 5, y - 1], [x - 1, y - 1]]);
@@ -1626,7 +1633,7 @@
     g.globalAlpha = 0.7 + Math.sin(motion * 1.3) * 0.1;
     drawTreeStar(g, tree, '#ffe7a2');
     g.globalAlpha = 0.6 * darkness;
-    g.drawImage(tree.glows[3], tree.x - 6, tree.y - tree.height - 8);
+    g.drawImage(tree.glows[3], tree.x + tree.bend - 6, tree.y - tree.height - 8);
     g.globalAlpha = 1;
     g.globalCompositeOperation = 'destination-out';
     for (const sprite of layers[light.from].sprites) {
