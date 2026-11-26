@@ -1927,6 +1927,7 @@
   function drawLand(world, layers, light, hour, motion, weather, clouds, sun, moon) {
     landContext.clearRect(0, 0, W, H);
     drawLandLayer(layers, light, 'terrain');
+    drawFlocks(landContext, world, hour, motion, weather, sun, moon);
     const actors = groundPopulation(world, motion, hour);
     updateFootprints(world, actors, motion);
     drawFootprints(landContext, world, motion);
@@ -2775,7 +2776,7 @@
     pixels(g, colors.tip, 0, 3, 1, 2);
   }
 
-  function drawFlocks(world, hour, motion, weather, sun, moon) {
+  function drawFlocks(g, world, hour, motion, weather, sun, moon) {
     if (season === 'winter') return;
     const daytime = smooth((hour - 5.4) / 1.2) * smooth((20.3 - hour) / 1.4);
     for (const flock of world.flocks) {
@@ -2791,20 +2792,20 @@
         const beat = motion * type.flap * Math.PI * 2 + member.phase;
         const glide = type.flap < 3 && Math.sin(motion * 0.47 + member.phase) > 0.35;
         const wing = glide ? 0.15 + Math.sin(motion * 1.1 + member.phase) * 0.15 : Math.sin(beat);
-        ctx.save();
-        ctx.globalAlpha = presence * (1 - weather.rain * 0.27);
-        ctx.translate(Math.round(pose.x), Math.round(pose.y));
-        ctx.scale(pose.direction * pose.scale, pose.scale);
-        if (flock.species === 'bat') drawBat(ctx, shades, wing, pose.bank);
-        else drawFlyingBird(ctx, flock.species, shades, wing, pose.bank);
+        g.save();
+        g.globalAlpha = presence * (1 - weather.rain * 0.27);
+        g.translate(Math.round(pose.x), Math.round(pose.y));
+        g.scale(pose.direction * pose.scale, pose.scale);
+        if (flock.species === 'bat') drawBat(g, shades, wing, pose.bank);
+        else drawFlyingBird(g, flock.species, shades, wing, pose.bank);
         if (type.night && flock.species !== 'bat') {
           const blink = wrap(motion + member.eyeOffset, member.eyePeriod);
           if (blink < 0.14 || (blink > 0.31 && blink < 0.39)) {
-            ctx.globalAlpha = presence * 0.85;
-            pixels(ctx, flock.species === 'eagleOwl' ? '#e9a459' : '#ebd399', 3, -1);
+            g.globalAlpha = presence * 0.85;
+            pixels(g, flock.species === 'eagleOwl' ? '#e9a459' : '#ebd399', 3, -1);
           }
         }
-        ctx.restore();
+        g.restore();
       }
     }
   }
@@ -3205,7 +3206,6 @@
     const sun = sunlightAt(world, hour, weather, clouds);
     const moon = moonlightAt(world, hour, weather, clouds);
     drawSky(world, light, motion, weather, clouds, sun, moon);
-    drawFlocks(world, hour, motion, weather, sun, moon);
     drawLand(world, layers, light, hour, motion, weather, clouds, sun, moon);
     const minutes = Math.floor(simulatedMinutes);
     if (clock.valueAsNumber !== minutes) clock.value = minutes;
