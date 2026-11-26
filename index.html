@@ -256,6 +256,8 @@
   const shadowContext = shadowCanvas.getContext('2d');
   const cloudCanvas = makeCanvas(W, SKY_HEIGHT);
   const cloudContext = cloudCanvas.getContext('2d');
+  const festivalCanvas = makeCanvas();
+  const festivalContext = festivalCanvas.getContext('2d');
   const ui = byId('interface');
   const interfaceToggle = byId('ui-toggle');
   const touchInterface = window.matchMedia('(pointer: coarse), (max-width: 680px)');
@@ -1430,6 +1432,7 @@
   function drawProp(g, item, palette, contact = true) {
     switch (item.kind) {
       case 'pine': drawPine(g, item, palette, contact); break;
+      case 'festivalTree': drawPine(g, item, palette, contact); break;
       case 'leaf': drawLeafTree(g, item, palette, contact); break;
       case 'house': drawHouse(g, item, palette, contact); break;
       case 'fence': drawFence(g, item, palette); break;
@@ -1437,6 +1440,7 @@
       default: drawUnderstory(g, item, palette);
     }
     if (palette.season === 'winter') drawSnowCover(g, item, palette);
+    if (item.kind === 'festivalTree') drawTreeDecorations(g, item, palette);
   }
 
   function drawSnowCover(g, item, palette) {
@@ -1465,7 +1469,7 @@
         pixels(g, snow[0], window.x - 1, window.y + window.h + 1, window.w + 2);
       }
       g.restore();
-    } else if (item.kind === 'pine') {
+    } else if (item.kind === 'pine' || item.kind === 'festivalTree') {
       const { x, y, height: h } = item;
       const half = item.width * 0.5;
       const random = randomFrom(item.seed);
@@ -1491,12 +1495,156 @@
     }
   }
 
+  const festiveColors = ['#ff665e', '#7aeda1', '#78bbff', '#ffda79', '#c49bff', '#ff96ca'];
+
+  function createFestivalTree(world) {
+    const random = randomFrom(hash(world.code + '/праздничная-ёлка'));
+    const height = Math.ceil(Math.max(...world.houses.map(house => {
+      const d = dimensions(house);
+      return d.wall + d.roof + d.rise + 8;
+    })) * 2);
+    let position = { x: W / 2, y: 238 };
+    let best = -Infinity;
+    for (let y = 194; y <= 246; y += 4) {
+      for (let x = 180; x <= 300; x += 4) {
+        if (!clearGround(world, x, y, 7)) continue;
+        const distance = Math.min(...world.houses.map(h => Math.hypot(x - h.x, (y - h.y) * 1.5)));
+        const score = -Math.abs(x - W / 2) * 0.8 - Math.abs(y - 224) * 0.6 +
+          Math.min(distance, 35) * 0.7 - (world.nearPath(x, y, 5) ? 24 : 0);
+        if (score > best) { best = score; position = { x, y }; }
+      }
+    }
+    const tree = { ...position, kind: 'festivalTree', height, width: height * 0.64, tint: 1,
+      seed: integer(random, 1, 2 ** 30), lights: [], ornaments: [] };
+    const half = tree.width * 0.5;
+    for (let row = 0; row < 6; row++) {
+      const level = 0.23 + row * 0.116;
+      const count = 5 + row * 2;
+      for (let bulb = 0; bulb < count; bulb++) {
+        const u = mix(-1, 1, bulb / (count - 1));
+        tree.lights.push({ row, index: tree.lights.length, color: (bulb + row * 2) % festiveColors.length,
+          x: Math.round(tree.x + u * half * level * 0.93),
+          y: Math.round(tree.y - height + height * level + (1 - u * u) * height * 0.036) });
+      }
+    }
+    for (let i = 0; i < 27; i++) {
+      const level = between(random, 0.22, 0.91);
+      tree.ornaments.push({ x: Math.round(tree.x + between(random, -0.72, 0.72) * half * level),
+        y: Math.round(tree.y - height + height * level), color: integer(random, 0, festiveColors.length - 1),
+        shape: i % 4, size: random() < 0.28 ? 2 : 1 });
+    }
+    return tree;
+  }
+
+  function drawTreeStar(g, tree, color) {
+    const x = tree.x;
+    const y = tree.y - tree.height - 2;
+    polygon(g, color, [[x, y - 5], [x + 1, y - 1], [x + 5, y - 1], [x + 2, y + 1],
+      [x + 3, y + 5], [x, y + 3], [x - 3, y + 5], [x - 2, y + 1], [x - 5, y - 1], [x - 1, y - 1]]);
+  }
+
+  function drawTreeDecorations(g, tree, palette) {
+    for (let row = 0; row < 6; row++) {
+      const bulbs = tree.lights.filter(light => light.row === row);
+      for (let i = 1; i < bulbs.length; i++) {
+        trace(g, palette.pine[0], bulbs[i - 1].x, bulbs[i - 1].y, bulbs[i].x, bulbs[i].y);
+      }
+    }
+    for (const ornament of tree.ornaments) {
+      const { x, y, size, shape } = ornament;
+      const color = seasonTone(festiveColors[ornament.color], palette.phase);
+      trace(g, palette.wood[4], x, y - size - 2, x, y - size);
+      if (shape === 0) {
+        polygon(g, color, [[x, y - size - 1], [x + size + 1, y], [x, y + size + 1], [x - size - 1, y]]);
+      } else if (shape === 1) {
+        trace(g, color, x, y - 2, x, y + 2, 2);
+        pixels(g, palette.snow[0], x, y - 1);
+        pixels(g, palette.snow[0], x, y + 1);
+      } else {
+        ellipse(g, color, x, y, size + 0.4, size + 0.6);
+        pixels(g, palette.snow[0], x - 1, y - 1);
+      }
+    }
+    for (const bulb of tree.lights) {
+      pixels(g, seasonTone(festiveColors[bulb.color], palette.phase), bulb.x, bulb.y);
+    }
+    drawTreeStar(g, tree, seasonTone('#f9cf77', palette.phase));
+  }
+
+  function garlandBrightness(light, motion) {
+    const mode = Math.floor(motion / 12) % 5;
+    const age = motion % 12;
+    if (mode === 0) return 0.16 + 0.84 * (0.5 + 0.5 * Math.sin(age * 4 - light.index * 0.62)) ** 3;
+    if (mode === 1) return (Math.floor(age * 2.3) + light.color) % 3 === 0 ? 1 : 0.12;
+    if (mode === 2) return 0.2 + 0.8 * (0.5 + 0.5 * Math.sin(age * 1.8 - light.row * 0.45));
+    if (mode === 3) return Math.sin(age * (1.7 + light.index % 5 * 0.24) + light.index * 2.4) > 0.65 ? 1 : 0.1;
+    const pulse = wrap(age * 0.7 - light.row * 0.16, 1);
+    return 0.13 + 0.87 * Math.max(0, 1 - pulse * 3);
+  }
+
+  function drawFestivalLights(world, layers, light, actors, motion, darkness) {
+    const tree = world.festivalTree;
+    const g = festivalContext;
+    if (!tree.glows) {
+      tree.glows = festiveColors.map(color => {
+        const glow = makeCanvas(13, 13);
+        const paint = glow.getContext('2d');
+        const gradient = paint.createRadialGradient(6, 6, 0, 6, 6, 6);
+        const channels = rgb(color);
+        gradient.addColorStop(0, translucent(channels, 0.58));
+        gradient.addColorStop(0.25, translucent(channels, 0.24));
+        gradient.addColorStop(1, translucent(channels, 0));
+        paint.fillStyle = gradient;
+        paint.fillRect(0, 0, 13, 13);
+        return glow;
+      });
+    }
+    g.clearRect(0, 0, W, H);
+    for (let pool = 0; pool < 3; pool++) {
+      const bulb = tree.lights[tree.lights.length - 1 - pool * 3];
+      const strength = garlandBrightness(bulb, motion);
+      const color = rgb(festiveColors[bulb.color]);
+      g.save();
+      g.translate(tree.x + (pool - 1) * 12, tree.y + 3);
+      g.scale(1, 0.35);
+      const gradient = g.createRadialGradient(0, 0, 2, 0, 0, 26);
+      gradient.addColorStop(0, translucent(color, darkness * strength * 0.19));
+      gradient.addColorStop(1, translucent(color, 0));
+      g.fillStyle = gradient;
+      g.fillRect(-27, -27, 54, 54);
+      g.restore();
+    }
+    for (const bulb of tree.lights) {
+      const strength = garlandBrightness(bulb, motion);
+      const glow = tree.glows[bulb.color];
+      g.globalAlpha = strength * (0.32 + darkness * 0.68);
+      g.drawImage(glow, bulb.x - 6, bulb.y - 6);
+      g.globalAlpha = 0.25 + strength * 0.75;
+      pixels(g, festiveColors[bulb.color], bulb.x, bulb.y, strength > 0.78 ? 2 : 1);
+      if (strength > 0.82) pixels(g, '#fff3ce', bulb.x, bulb.y);
+    }
+    g.globalAlpha = 0.7 + Math.sin(motion * 1.3) * 0.1;
+    drawTreeStar(g, tree, '#ffe7a2');
+    g.globalAlpha = 0.6 * darkness;
+    g.drawImage(tree.glows[3], tree.x - 6, tree.y - tree.height - 8);
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = 'destination-out';
+    for (const sprite of layers[light.from].sprites) {
+      if (sprite.y > tree.y) g.drawImage(sprite.canvas, sprite.left, sprite.top);
+    }
+    for (const actor of actors) {
+      if (actor.y > tree.y) drawGroundActor(g, actor, motion);
+    }
+    g.globalCompositeOperation = 'source-over';
+    landContext.drawImage(festivalCanvas, 0, 0);
+  }
+
   function paintLand(world, palette) {
     const terrain = makeCanvas();
     const ground = terrain.getContext('2d');
     drawDistantLand(ground, world, palette);
     drawMeadow(ground, world, palette);
-    const sprites = world.items.map(item => {
+    const sprites = world.sceneItems.map(item => {
       let half = (item.width || item.size || 8) + 7;
       let height = (item.height || item.size || 10) + 8;
       let left = item.x - half;
@@ -1532,9 +1680,9 @@
     const shape = silhouette.getContext('2d');
     const highlight = makeCanvas();
     const g = highlight.getContext('2d');
-    for (const item of world.items) {
+    for (const item of world.sceneItems) {
       const house = item.kind === 'house' ? dimensions(item) : null;
-      const tree = item.kind === 'pine' || item.kind === 'leaf';
+      const tree = item.kind === 'pine' || item.kind === 'leaf' || item.kind === 'festivalTree';
       const { x, y } = item;
       shape.clearRect(0, 0, W, H);
       drawProp(shape, item, seasonalColors.night, false);
@@ -1846,7 +1994,7 @@
     const axis = Math.hypot(dx, dy);
     const acrossX = dy / axis * 0.92;
     const acrossY = -dx / axis * 0.51;
-    const outline = kind === 'pine'
+    const outline = kind === 'pine' || kind === 'festivalTree'
       ? [[0, -0.07], [0.21, -0.07], [0.16, -0.53], [0.43, -0.28], [0.35, -0.41],
         [0.64, -0.18], [0.56, -0.26], [1, 0], [0.57, 0.24], [0.64, 0.16], [0.34, 0.43],
         [0.43, 0.28], [0.16, 0.53], [0.21, 0.07], [0, 0.07]]
@@ -1873,9 +2021,9 @@
       const dy = (0.47 + elevation * 0.23) * reach;
       const ink = cssColor(blendRgb([56, 43, 69], [38, 54, 65], elevation));
       shadowContext.clearRect(0, 0, W, H);
-      for (const item of world.items) {
+      for (const item of world.sceneItems) {
         if (item.kind === 'house') castHouseShadow(item, dx, dy, ink);
-        if (item.kind === 'pine' || item.kind === 'leaf') castTreeShadow(item, dx, dy, ink);
+        if (item.kind === 'pine' || item.kind === 'leaf' || item.kind === 'festivalTree') castTreeShadow(item, dx, dy, ink);
       }
     }
     const shadow = sun.direct * (0.54 + (1 - sun.elevation) * 0.19);
@@ -1933,7 +2081,7 @@
     drawFootprints(landContext, world, motion);
     drawCastShadows(world, sun);
     let nextActor = 0;
-    for (let i = 0; i < world.items.length; i++) {
+    for (let i = 0; i < world.sceneItems.length; i++) {
       const sprite = layers[light.from].sprites[i];
       while (nextActor < actors.length && actors[nextActor].y <= sprite.y) {
         drawGroundActor(landContext, actors[nextActor++], motion);
@@ -1956,6 +2104,7 @@
       landContext.drawImage(world.moonMasks[1], 0, 0);
       landContext.globalAlpha = 1;
     }
+    if (season === 'winter') drawFestivalLights(world, layers, light, actors, motion, moon.darkness);
     const camp = campState(world.population.camp, hour);
     if (camp && camp.heat > 0) {
       const hearth = world.population.camp;
@@ -3271,6 +3420,7 @@
     world.population = createGroundPopulation(world);
     world.flocks = createFlocks(code);
     world.cloudLayers = generateCloudLayers(code);
+    world.festivalTree = createFestivalTree(world);
     const fragment = '#' + encodeURIComponent(code);
     if (location.hash !== fragment) {
       try { history.replaceState(null, '', fragment); }
@@ -3284,6 +3434,7 @@
   }
 
   function rebuildSeason() {
+    world.sceneItems = season === 'winter' ? [...world.items, world.festivalTree].sort((a, b) => a.y - b.y) : world.items;
     seasonalColors = Object.fromEntries(Object.entries(colors).map(([phase, base]) =>
       [phase, seasonalPalette(base, phase)]));
     world.seasonEffects = createSeasonEffects(world);
