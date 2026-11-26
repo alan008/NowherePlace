@@ -1,0 +1,2979 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#101e20">
+<title>Лесная деревня</title>
+<style>
+  :root {
+    color-scheme: dark;
+    font-family: system-ui, sans-serif;
+    background: #101b1d;
+    color: #fff1cf;
+    --panel: #13221fee;
+    --line: #a8b78e48;
+    --muted: #dbddbd;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; overflow: hidden; }
+  button, input, select { font: inherit; }
+  button, select, .seed-input {
+    color: inherit;
+    background: #21342e;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+  }
+  button { min-height: 42px; padding: 0 12px; cursor: pointer; }
+  button:hover, select:hover { background: #30443a; }
+  :focus-visible { outline: 2px solid #ffe0a0; outline-offset: 3px; }
+  main {
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    position: relative;
+    isolation: isolate;
+    background: radial-gradient(ellipse at center, #20302e, #101b1d 76%);
+  }
+  canvas {
+    display: block;
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: min(100vw, 177.7778vh);
+    height: min(100vh, 56.25vw);
+    width: min(100vw, 177.7778dvh);
+    height: min(100dvh, 56.25vw);
+    image-rendering: crisp-edges;
+    image-rendering: pixelated;
+  }
+  canvas:focus { outline: none; }
+  .ui {
+    position: absolute;
+    inset: 0;
+    height: min(100%, calc(56.25vw + 166px));
+    margin: auto;
+    pointer-events: none;
+    padding: clamp(12px, 2.7vw, 36px);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .ui[hidden], .settings[hidden] { display: none; }
+  .scene-heading, .controls { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+  .title, .controls > button, .actions, .settings {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    box-shadow: 0 3px 0 #1018124d;
+    border-radius: 4px;
+  }
+  .title { padding: 9px 13px; }
+  h1 { margin: 0; font-family: Georgia, serif; font-size: clamp(17px, 2.1vw, 29px); font-weight: normal; }
+  .season-switch {
+    position: fixed;
+    top: clamp(12px, 2.7vw, 36px);
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    pointer-events: auto;
+  }
+  .season-switch button { min-height: 34px; padding-inline: 11px; border-color: transparent; background: transparent; font-size: 14px; }
+  .season-switch button[aria-pressed="true"] { background: #415443; color: #ffe2a7; }
+  @media (max-width: 680px) {
+    .scene-heading { flex-direction: column; align-items: flex-start; }
+    .season-switch { top: 12px; }
+  }
+  @media (max-width: 680px) and (max-height: 500px) {
+    .scene-heading .title { margin-top: 48px; }
+  }
+  .controls { align-items: flex-end; }
+  .control-side { position: relative; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+  .controls button, .settings { pointer-events: auto; }
+  .actions { display: flex; padding: 3px; gap: 3px; }
+  .actions button { background: transparent; border-color: transparent; }
+  .actions button:hover, .actions button[aria-expanded="true"], .actions button[aria-pressed="true"] { background: #31443c; }
+  .controls > button { padding-inline: 15px; min-height: 50px; }
+  .compact-icon { display: none; }
+  .settings {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 10px);
+    width: min(310px, calc(100vw - 24px));
+    max-height: calc(100dvh - 132px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 15px;
+    display: grid;
+    gap: 12px;
+  }
+  .settings label { display: grid; gap: 6px; color: var(--muted); font-size: 14px; }
+  .time-label { display: flex; justify-content: space-between; }
+  .settings label input, .settings select { width: 100%; min-width: 0; }
+  input[type="range"] { accent-color: #ecc687; margin: 0; min-height: 24px; }
+  .settings select, .seed-input { min-height: 36px; padding: 5px 8px; }
+  .seed-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+  .seed-row button { min-height: 36px; }
+  @media (max-width: 550px) {
+    .title { padding: 7px 8px; }
+    .controls > button, .actions button { padding-inline: 8px; font-size: 13px; }
+    .controls { flex-wrap: wrap; gap: 6px; }
+    .control-side { margin-left: auto; }
+    .actions button:has(.compact-icon) { min-width: 38px; }
+    .compact-icon { display: inline; font-size: 19px; line-height: 1; }
+    .action-label { display: none; }
+  }
+  @media (orientation: landscape) and (max-height: 400px) {
+    .settings { max-height: calc(100dvh - 108px); }
+  }
+</style>
+</head>
+<body>
+<main id="village">
+  <canvas id="landscape" width="480" height="270" tabindex="-1" role="img" aria-label="Пиксельная лесная деревня с жителями, питомцами, лесными зверями, птицами, погодой и сменой суток"></canvas>
+  <div class="ui" id="interface">
+    <header class="scene-heading">
+      <div class="title"><h1>Лесная деревня</h1></div>
+      <nav class="season-switch" aria-label="Время года">
+        <button type="button" data-season="winter" aria-pressed="false">Зима</button>
+        <button type="button" data-season="spring" aria-pressed="false">Весна</button>
+        <button type="button" data-season="summer" aria-pressed="true">Лето</button>
+        <button type="button" data-season="autumn" aria-pressed="false">Осень</button>
+      </nav>
+    </header>
+    <div class="controls">
+      <button id="regenerate" type="button">Новая деревня</button>
+      <div class="control-side">
+        <section class="settings" id="settings" aria-label="Настройки деревни" hidden>
+          <label for="time">
+            <span class="time-label">Время суток <output id="time-label" for="time"></output></span>
+            <input id="time" type="range" min="0" max="1439" step="1">
+          </label>
+          <label for="weather">Погода
+            <select id="weather">
+              <option value="auto">Меняется сама</option>
+              <option value="clear">Без осадков</option>
+              <option value="cloudy">Пасмурно</option>
+              <option value="fog">Туман</option>
+              <option value="rain">Дождь</option>
+            </select>
+          </label>
+          <label for="cloud-cover">Облачность
+            <select id="cloud-cover">
+              <option value="auto">Меняется сама</option>
+              <option value="0">Чистое небо</option>
+              <option value="1">Перистые облака</option>
+              <option value="2">Кучевые облака</option>
+              <option value="3">Полнеба с просветами</option>
+              <option value="4">Почти сплошная</option>
+              <option value="5">Сплошная</option>
+            </select>
+          </label>
+          <form class="seed-row" id="seed-form">
+            <label for="seed">Код деревни
+              <input id="seed" class="seed-input" type="text" maxlength="48" autocomplete="off" spellcheck="false">
+            </label>
+            <button type="submit" style="align-self: end">Открыть</button>
+          </form>
+          <button id="hide-ui" type="button" title="Скрыть интерфейс (H)">Скрыть интерфейс</button>
+        </section>
+        <div class="actions">
+          <button id="pause" type="button" aria-label="Пауза" aria-pressed="false" title="Пауза (пробел)"><span class="action-label">Пауза</span><span class="compact-icon" aria-hidden="true">Ⅱ</span></button>
+          <button id="fullscreen" type="button" aria-label="На весь экран"><span class="action-label">На весь экран</span><span class="compact-icon" aria-hidden="true">⛶</span></button>
+          <button id="settings-toggle" type="button" aria-expanded="false" aria-controls="settings">Настройки</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+<script>
+(() => {
+  'use strict';
+
+  const W = 480;
+  const H = 270;
+  const SKY_HEIGHT = 154;
+  const CLOUD_TILE = 768;
+  const DAY_SECONDS = 360;
+  const DAY_MINUTES = 1440;
+  const START_HOUR = 7.8;
+  const byId = id => document.getElementById(id);
+  const canvas = byId('landscape');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  function makeCanvas(width = W, height = H) {
+    const layer = document.createElement('canvas');
+    layer.width = width;
+    layer.height = height;
+    return layer;
+  }
+  const landCanvas = makeCanvas();
+  const landContext = landCanvas.getContext('2d');
+  const shadowCanvas = makeCanvas();
+  const shadowContext = shadowCanvas.getContext('2d');
+  const cloudCanvas = makeCanvas(W, SKY_HEIGHT);
+  const cloudContext = cloudCanvas.getContext('2d');
+  const ui = byId('interface');
+  const clock = byId('time');
+  const weatherPicker = byId('weather');
+  const coverPicker = byId('cloud-cover');
+  const seedField = byId('seed');
+  const settings = byId('settings');
+  const settingsToggle = byId('settings-toggle');
+  let season = 'summer';
+  let seasonalColors;
+  const pauseButton = byId('pause');
+  const fullscreenButton = byId('fullscreen');
+
+  const clamp = (value, min = 0, max = 1) => Math.min(max, Math.max(min, value));
+  const mix = (a, b, t) => a + (b - a) * t;
+  const wrap = (value, period) => ((value % period) + period) % period;
+  const smooth = value => {
+    const t = clamp(value);
+    return t * t * (3 - 2 * t);
+  };
+
+  function hash(value) {
+    let number = 2166136261;
+    for (const character of value) {
+      number = Math.imul(number ^ character.codePointAt(0), 16777619);
+    }
+    return number >>> 0;
+  }
+
+  function randomFrom(seed) {
+    let state = seed >>> 0;
+    return () => {
+      state = (state + 0x6d2b79f5) >>> 0;
+      let value = Math.imul(state ^ (state >>> 15), state | 1);
+      value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+      return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  const between = (random, min, max) => mix(min, max, random());
+  const integer = (random, min, max) => Math.floor(between(random, min, max + 1));
+  const pick = (random, values) => values[integer(random, 0, values.length - 1)];
+
+  // Integer scanlines keep the painted silhouettes crisp at the canvas resolution.
+  function polygon(g, color, points) {
+    const ys = points.map(point => point[1]);
+    const first = Math.ceil(Math.min(...ys) - 0.5);
+    const last = Math.ceil(Math.max(...ys) - 0.5);
+    const edges = points.map(([x, y], i) => {
+      const [nextX, nextY] = points[(i + 1) % points.length];
+      return { x, y, minY: Math.min(y, nextY), maxY: Math.max(y, nextY), slope: (nextX - x) / (nextY - y) };
+    });
+    g.fillStyle = color;
+    for (let y = first; y < last; y++) {
+      const scan = y + 0.5;
+      const hits = [];
+      for (const edge of edges) {
+        if (scan >= edge.minY && scan < edge.maxY) hits.push(edge.x + (scan - edge.y) * edge.slope);
+      }
+      hits.sort((a, b) => a - b);
+      for (let i = 0; i + 1 < hits.length; i += 2) {
+        const x = Math.ceil(hits[i] - 0.5);
+        g.fillRect(x, y, Math.ceil(hits[i + 1] - 0.5) - x, 1);
+      }
+    }
+  }
+
+  function pixels(g, color, x, y, width = 1, height = 1) {
+    g.fillStyle = color;
+    g.fillRect(Math.round(x), Math.round(y), Math.round(width), Math.round(height));
+  }
+
+  function ellipse(g, color, cx, cy, rx, ry) {
+    g.fillStyle = color;
+    const top = Math.ceil(cy - ry);
+    const bottom = Math.floor(cy + ry);
+    for (let y = top; y <= bottom; y++) {
+      const spread = rx * Math.sqrt(Math.max(0, 1 - ((y - cy) / ry) ** 2));
+      const left = Math.ceil(cx - spread);
+      const right = Math.floor(cx + spread);
+      if (right >= left) g.fillRect(left, y, right - left + 1, 1);
+    }
+  }
+
+  function trace(g, color, x0, y0, x1, y1, width = 1) {
+    let x = Math.round(x0);
+    let y = Math.round(y0);
+    const endX = Math.round(x1);
+    const endY = Math.round(y1);
+    const dx = Math.abs(endX - x);
+    const dy = -Math.abs(endY - y);
+    const stepX = x < endX ? 1 : -1;
+    const stepY = y < endY ? 1 : -1;
+    let error = dx + dy;
+    g.fillStyle = color;
+    for (;;) {
+      g.fillRect(x, y, width, width);
+      if (x === endX && y === endY) break;
+      const doubled = 2 * error;
+      if (doubled >= dy) { error += dy; x += stepX; }
+      if (doubled <= dx) { error += dx; y += stepY; }
+    }
+  }
+
+  const colors = {
+    dawn: {
+      sky: ['#466c89', '#99a6ae', '#f4cca0', '#fbe2ab'],
+      hills: ['#ad9ca1', '#8d94a2', '#6e8290', '#536f76'],
+      mist: '#e4c5ac',
+      forest: ['#688483', '#4b7472', '#396761', '#315955'],
+      grass: ['#536b45', '#728353', '#8c925a', '#a5a261', '#455c46', '#63794a'],
+      path: ['#6e6b4a', '#af9667', '#c7ab75', '#8d7b56'],
+      pine: ['#203d38', '#2e5144', '#426249', '#5f7650', '#788a58'],
+      leaf: ['#334f3b', '#4b6846', '#66804e', '#89935b', '#a59e67'],
+      stone: ['#46544e', '#646e60', '#8e8b72', '#b5aa83'],
+      wood: ['#513b31', '#81583d', '#a7754b', '#c79058', '#d9a66a', '#e8bc7e'],
+      roofs: [['#51393b', '#774a43', '#995c4c', '#bd795c'], ['#3d4948', '#53635d', '#6d7b6a', '#92917a'], ['#594335', '#836349', '#a17b53', '#c79a63']],
+      flowers: ['#eac488', '#d6a1ab', '#e3cfad'],
+      shadow: '#253a35', glass: '#7c897e'
+    },
+    day: {
+      sky: ['#507f9b', '#8eb5b9', '#c5d0b1', '#e9d9a3'],
+      hills: ['#99aaab', '#78979f', '#60858f', '#507a80'],
+      mist: '#d1d5b9',
+      forest: ['#648c83', '#497d70', '#396d60', '#2b5c53'],
+      grass: ['#547644', '#72904e', '#8ea055', '#acac60', '#426445', '#65834a'],
+      path: ['#74794f', '#b4a16b', '#d3b77e', '#90845a'],
+      pine: ['#1d4037', '#2b5944', '#42734b', '#5d8752', '#7e9a59'],
+      leaf: ['#2d5238', '#47713e', '#658a4a', '#88a057', '#a6a961'],
+      stone: ['#475953', '#697a6c', '#939984', '#b8b49a'],
+      wood: ['#503b32', '#79583e', '#a47a4d', '#c6935d', '#dcaf74', '#e7bf81'],
+      roofs: [['#523d43', '#794e45', '#9f654e', '#c08360'], ['#36494e', '#4e6567', '#6d8179', '#8e9987'], ['#543e32', '#7d6045', '#9c7b51', '#c09b63']],
+      flowers: ['#eac978', '#d1a1ad', '#eee1b5'],
+      shadow: '#253c36', glass: '#809b97'
+    },
+    dusk: {
+      sky: ['#52577d', '#a87685', '#e99b7d', '#f8ca86'],
+      hills: ['#ad8290', '#8a758d', '#666d80', '#4b6573'],
+      mist: '#e8b597',
+      forest: ['#687981', '#4f6d70', '#3a605e', '#335253'],
+      grass: ['#5f704a', '#7f7e4e', '#9a8952', '#b19a58', '#515e43', '#716f47'],
+      path: ['#756448', '#b18c60', '#d3a776', '#907651'],
+      pine: ['#273b3a', '#3c5142', '#526045', '#756e48', '#927f4e'],
+      leaf: ['#394b3b', '#576344', '#78764b', '#988451', '#b89758'],
+      stone: ['#4c5051', '#6c6861', '#988372', '#bf9f80'],
+      wood: ['#563b36', '#895641', '#af7148', '#cc8954', '#e5a266', '#f0b978'],
+      roofs: [['#563d43', '#805046', '#a7624c', '#c87854'], ['#41464c', '#5d6062', '#7b7970', '#9b8b77'], ['#5b4235', '#846047', '#a67a4e', '#cc945d']],
+      flowers: ['#f0bb72', '#d098ac', '#e9cda4'],
+      shadow: '#31343c', glass: '#786f77'
+    },
+    night: {
+      sky: ['#11192e', '#1b2942', '#2a3c50', '#384c5d'],
+      hills: ['#394b60', '#32465c', '#2a4053', '#25384b'],
+      mist: '#8790a4',
+      forest: ['#34505a', '#294950', '#26414a', '#203742'],
+      grass: ['#273d3d', '#344a42', '#3e5548', '#495f4c', '#20343a', '#2c443f'],
+      path: ['#374541', '#58584d', '#6d6454', '#494e46'],
+      pine: ['#12272f', '#1b3538', '#25433e', '#365348', '#456052'],
+      leaf: ['#1a3034', '#25413b', '#334f43', '#475a4b', '#566650'],
+      stone: ['#2e3d42', '#405052', '#546264', '#67736f'],
+      wood: ['#302d33', '#463c3b', '#5d4a43', '#6d5549', '#86684f', '#99805d'],
+      roofs: [['#302d3a', '#463940', '#574449', '#69534d'], ['#233340', '#344553', '#455768', '#52656c'], ['#35343a', '#49443f', '#5a5044', '#6c5b49']],
+      flowers: ['#82785a', '#755e72', '#878875'],
+      shadow: '#131f2c', glass: '#353d49'
+    }
+  };
+
+  const lightStops = [
+    [0, 'night'], [4.5, 'night'], [6.9, 'dawn'], [8.4, 'dawn'],
+    [10.4, 'day'], [15.8, 'day'], [18.4, 'dusk'], [19.5, 'dusk'],
+    [21.6, 'night'], [24, 'night']
+  ];
+
+  function lightingAt(hour) {
+    const index = lightStops.findIndex(stop => stop[0] > hour);
+    const [start, from] = lightStops[index - 1];
+    const [end, to] = lightStops[index];
+    return { from, to, blend: smooth((hour - start) / (end - start)) };
+  }
+
+  function rgb(hex) {
+    return [1, 3, 5].map(index => Number.parseInt(hex.slice(index, index + 2), 16));
+  }
+
+  function blendRgb(a, b, t) {
+    return a.map((value, i) => Math.round(mix(value, b[i], t)));
+  }
+
+  const cssColor = values => 'rgb(' + values.join(',') + ')';
+
+  function skyColor(a, b, blend) {
+    return cssColor(blendRgb(rgb(a), rgb(b), blend));
+  }
+
+  const seasonThemes = {
+    spring: {
+      grass: ['#6d964f', '#86ad5e', '#a7c874', '#c0d58a', '#557c4a', '#91b566'],
+      leaf: ['#4f7c49', '#75a654', '#99c46a', '#bbda86', '#d7e7a5'],
+      flowers: ['#f4d7e2', '#fff2c4', '#e1d5f2'],
+      forest: ['#80a18a', '#659376', '#4c815f', '#397052']
+    },
+    autumn: {
+      grass: ['#8c8052', '#aa945e', '#c1a96e', '#d6bd83', '#756c49', '#9b8758'],
+      leaf: ['#714a3c', '#9a5c3c', '#bc7a40', '#d99f4c', '#edc671'],
+      flowers: ['#b78c56', '#c4a26d', '#d0b486'],
+      forest: ['#a69479', '#8e8966', '#7b7c57', '#626e4f']
+    },
+    winter: {
+      grass: ['#becfd9', '#d4e0e5', '#e5ebec', '#f2f3ed', '#aabfce', '#c6d7e0'],
+      path: ['#a4b9ca', '#b5c7d3', '#c5d4dc', '#9eb5c6'],
+      leaf: ['#55535a', '#6a6463', '#8c8075', '#b3a393', '#dedbd0'],
+      pine: ['#243f43', '#345d59', '#49776a', '#6a927b', '#96af94'],
+      forest: ['#9cb5bc', '#7d9ea6', '#648a93', '#507780'],
+      hills: ['#c3d1db', '#aebfce', '#8fa7b9', '#7a99ac']
+    }
+  };
+
+  function seasonTone(hex, phase) {
+    const factors = { day: [1, 1, 1], dawn: [0.94, 0.88, 0.86],
+      dusk: [0.95, 0.75, 0.69], night: [0.27, 0.35, 0.46] }[phase];
+    return '#' + rgb(hex).map((channel, i) => Math.round(channel * factors[i]).toString(16).padStart(2, '0')).join('');
+  }
+
+  function seasonalPalette(base, phase) {
+    const palette = { ...base, season, phase };
+    for (const [key, values] of Object.entries(seasonThemes[season] || {})) {
+      palette[key] = values.map(hex => seasonTone(hex, phase));
+    }
+    palette.snow = ['#f5f4ed', '#d6e3ed', '#a1b9cd'].map(hex => seasonTone(hex, phase));
+    if (season === 'winter') palette.sky = base.sky.map((hex, i) =>
+      '#' + blendRgb(rgb(hex), rgb(seasonTone(['#749bb6', '#aec8d8', '#d4dfe4', '#e9e6de'][i], phase)), 0.48)
+        .map(value => value.toString(16).padStart(2, '0')).join(''));
+    return palette;
+  }
+
+  function treeLeafColors(item, palette) {
+    if (palette.season !== 'autumn') return palette.leaf;
+    const hues = [
+      ['#77533b', '#aa773a', '#cea044', '#e3bd5b', '#f2d98b'],
+      ['#703d39', '#98453b', '#bb5740', '#db7d4e', '#eea66c'],
+      ['#764838', '#a65e38', '#cc803d', '#e5a351', '#f5c97d']
+    ];
+    return hues[item.seed % hues.length].map(hex => seasonTone(hex, palette.phase));
+  }
+
+  function curve(points, coordinate) {
+    let index = points.findIndex(point => point[0] > coordinate);
+    if (index === -1) return points[points.length - 1][1];
+    if (index === 0) return points[0][1];
+    const [leftX, leftY] = points[index - 1];
+    const [rightX, rightY] = points[index];
+    const previous = points[Math.max(0, index - 2)];
+    const next = points[Math.min(points.length - 1, index + 1)];
+    const distance = rightX - leftX;
+    const t = (coordinate - leftX) / distance;
+    const leftSlope = (rightY - previous[1]) / (rightX - previous[0]);
+    const rightSlope = (next[1] - leftY) / (next[0] - leftX);
+    return mix(leftY, rightY, smooth(t)) +
+      distance * t * (1 - t) * ((1 - t) * leftSlope - t * rightSlope);
+  }
+
+  const houseStyles = {
+    cottage: { width: 25, depth: 12, wall: 15, roof: 13, porch: false, chimney: true },
+    lodge: { width: 38, depth: 17, wall: 21, roof: 17, porch: true, chimney: true },
+    shed: { width: 20, depth: 10, wall: 12, roof: 8, porch: false, chimney: false }
+  };
+
+  function dimensions(house) {
+    const style = houseStyles[house.style];
+    const front = Math.round(style.width * house.scale * (house.view === 'side' ? 1.22 : 1));
+    const depth = house.view === 'iso' || !house.view ? Math.round(style.depth * house.scale) : 0;
+    const wall = Math.round(style.wall * house.scale);
+    const roof = Math.round(style.roof * house.scale);
+    const left = -Math.round((front + depth) / 2);
+    return { style, front, depth, wall, roof, left, right: left + front,
+      peak: left + Math.floor(front / 2), rise: depth ? Math.max(3, Math.round(depth * 0.38)) : 0 };
+  }
+
+  function houseDoor(house) {
+    const d = dimensions(house);
+    return { x: Math.round(house.x + house.face * (d.left + Math.floor(d.front * 0.7))), y: house.y + 2 };
+  }
+
+  function houseBounds(house, padding = 0) {
+    const d = dimensions(house);
+    return { left: house.x - (d.front + d.depth) / 2 - padding,
+      right: house.x + (d.front + d.depth) / 2 + padding,
+      top: house.y - d.wall - d.roof - d.rise - 7 - padding, bottom: house.y + 4 + padding };
+  }
+
+  function generateWorld(code) {
+    const random = randomFrom(hash(code));
+    const ridgePhase = between(random, 0, Math.PI * 2);
+    const sway = between(random, 0, Math.PI * 2);
+    const bendSide = random() > 0.5 ? 1 : -1;
+    const fringe = x => 147 + Math.sin(x / 57 + sway) * 7 + Math.sin(x / 30 + ridgePhase) * 3;
+    const hills = Array.from({ length: 4 }, (_, layer) => {
+      const points = [];
+      const wave = between(random, 0, Math.PI * 2);
+      const distance = integer(random, 68, 106);
+      for (let x = -32; x <= W + 32; x += 7) {
+        const height = 84 + 16 * layer + Math.sin(x / distance + wave) * (17 - layer * 2) +
+          Math.cos(x / (33 + layer * 3) - wave) * (9 - layer) + between(random, -1.5, 1.5);
+        points.push([x, Math.round(height)]);
+      }
+      return points;
+    });
+    const farTrees = [];
+    for (let layer = 0; layer < 3; layer++) {
+      for (let x = -6; x < W + 8; x += integer(random, 2 + layer, 6 + layer * 2)) {
+        const y = fringe(x) - (3 - layer) * 8 + integer(random, -2, 3);
+        const height = integer(random, 4 + layer * 2, 10 + layer * 3);
+        farTrees.push({ x, y: Math.round(y), height, width: integer(random, 2, Math.ceil(height / 3) + 1), layer });
+      }
+    }
+
+    const items = [];
+    const houses = [];
+    const count = integer(random, 6, 9);
+    const views = ['front', 'side', 'iso'];
+    const types = ['cottage', 'lodge', 'shed'];
+    for (let attempt = 0; houses.length < count && attempt < 1200; attempt++) {
+      const x = integer(random, 68, W - 68);
+      const y = integer(random, Math.ceil(fringe(x) + 14), 246);
+      const type = houses.length < 3 ? types[houses.length] : pick(random, ['cottage', 'cottage', 'lodge', 'shed']);
+      const view = houses.length < 3 ? views[houses.length] : pick(random, views);
+      const house = { kind: 'house', x, y, style: type, view,
+        scale: mix(0.61, 1.15, clamp((y - 152) / 100)) * between(random, 0.88, 1.08),
+        face: pick(random, [-1, 1]), seed: integer(random, 1, 2 ** 30),
+        litAt: between(random, 18.6, 20), goesDark: between(random, 3.9, 5.9),
+        roofVariant: pick(random, [0, 1, 2]) };
+      const bounds = houseBounds(house, 10);
+      if (houses.some(other => {
+        const b = houseBounds(other, 5);
+        return bounds.left < b.right && bounds.right > b.left && bounds.top < b.bottom && bounds.bottom > b.top;
+      })) continue;
+      items.push(house);
+      houses.push(house);
+    }
+
+    const gardens = [];
+    for (const house of houses) {
+      if (house.style === 'shed' || random() > 0.67) continue;
+      const side = pick(random, [-1, 1]);
+      const bounds = houseBounds(house);
+      const width = integer(random, 17, 29);
+      const depth = integer(random, 10, 17);
+      const left = Math.round(side < 0 ? bounds.left - width - 4 : bounds.right + 4);
+      const top = house.y - integer(random, 4, 10);
+      const garden = { left, right: left + width, top, bottom: top + depth, owner: house.seed, side, seed: integer(random, 1, 2 ** 30) };
+      if (left < 43 || garden.right > W - 43 || garden.bottom > 259 ||
+        houses.some(other => {
+          const b = houseBounds(other, 4);
+          return left < b.right && garden.right > b.left && top < other.y + 15 && garden.bottom > b.top;
+        }) || gardens.some(g => left < g.right + 4 && garden.right > g.left - 4 &&
+          top < g.bottom + 4 && garden.bottom > g.top - 4)) continue;
+      gardens.push(garden);
+      for (const [a, b, gate] of [
+        [[left, top], [garden.right, top], false],
+        [[left, top], [left, garden.bottom], side > 0],
+        [[garden.right, top], [garden.right, garden.bottom], side < 0],
+        [[left, garden.bottom], [garden.right, garden.bottom], false]
+      ]) {
+        items.push({ kind: 'fence', x: a[0], y: Math.max(a[1], b[1]), a, b, gate,
+          height: Math.max(3, Math.round(house.scale * 5)) });
+      }
+    }
+    const paths = generatePaths(houses, gardens, fringe, random);
+    const nearPath = (x, y, margin = 0) => {
+      for (let dy = -margin; dy <= margin; dy++) {
+        for (let dx = -margin; dx <= margin; dx++) {
+          const px = Math.round(x + dx);
+          const py = Math.round(y + dy);
+          if (px >= 0 && px < W && py >= 0 && py < H && paths.mask[py * W + px]) return true;
+        }
+      }
+      return false;
+    };
+    const enclosesHouse = (x, y, padding = 0) => houses.some(house => {
+      const b = houseBounds(house, padding);
+      return x > b.left && x < b.right && y > b.top && y < b.bottom;
+    }) || gardens.some(g => x > g.left - padding && x < g.right + padding && y > g.top - padding && y < g.bottom + padding);
+
+    function addTree(x, y, height, kind) {
+      if (nearPath(x, y, 3) || enclosesHouse(x, y - height * 0.25, height * 0.22)) return;
+      items.push({ kind, x: Math.round(x), y: Math.round(y), height: Math.round(height),
+        width: between(random, 0.37, 0.55) * height, seed: integer(random, 1, 2 ** 30),
+        tint: integer(random, 0, 2) });
+    }
+
+    for (const side of [-1, 1]) {
+      const edge = side < 0 ? 0 : W;
+      for (let i = 0; i < 18; i++) {
+        const y = integer(random, 148, 222);
+        const x = edge - side * integer(random, 6, Math.round(114 - (y - 148) * 0.5));
+        const height = between(random, 13, 31) + (y - 147) * 0.18;
+        if (!enclosesHouse(x, y - height * 0.34, 8)) addTree(x, y, height, random() < 0.18 ? 'leaf' : 'pine');
+      }
+      for (let i = 0; i < 8; i++) {
+        const y = integer(random, 226, 279);
+        const x = edge - side * integer(random, -12, 87);
+        addTree(x, y, between(random, 37, 60) + (y - 222) * 0.32, random() < 0.23 ? 'leaf' : 'pine');
+      }
+      addTree(edge - side * integer(random, 15, 34), integer(random, 272, 283), integer(random, 82, 99), 'pine');
+      addTree(edge - side * integer(random, 58, 80), integer(random, 257, 280), integer(random, 51, 73), 'pine');
+    }
+
+    for (let i = 0; i < 29; i++) {
+      const x = integer(random, 40, W - 40);
+      const y = Math.round(fringe(x) + integer(random, -2, 13));
+      if (!nearPath(x, y, 4) && !enclosesHouse(x, y - 8, 3)) {
+        addTree(x, y, integer(random, 10, 24), random() < 0.24 ? 'leaf' : 'pine');
+      }
+    }
+    for (let i = 0; i < 9; i++) {
+      const x = integer(random, 90, W - 90);
+      const y = integer(random, 184, 250);
+      if (!nearPath(x, y, 5) && !enclosesHouse(x, y - 12, 13)) {
+        addTree(x, y, integer(random, 19, 37), i % 2 ? 'leaf' : 'pine');
+      }
+    }
+
+    const outcropSide = -bendSide;
+    const outcropX = outcropSide < 0 ? integer(random, 90, 145) : integer(random, 335, 390);
+    for (let i = 0; i < 8; i++) {
+      const x = outcropX + integer(random, -23, 24);
+      const y = 245 + integer(random, -10, 12);
+      if (enclosesHouse(x, y - 5, 14) || nearPath(x, y, 12)) continue;
+      items.push({ kind: 'rock', x, y,
+        size: i < 3 ? integer(random, 15, 23) : integer(random, 4, 11), seed: integer(random, 1, 2 ** 30) });
+    }
+    for (let i = 0; i < 87; i++) {
+      const x = integer(random, 6, W - 6);
+      const y = integer(random, Math.max(151, Math.ceil(fringe(x))), H + 3);
+      if (nearPath(x, y, 4) || enclosesHouse(x, y, 3)) continue;
+      const kind = pick(random, ['rock', 'bush', 'bush', 'stump']);
+      const size = Math.round(between(random, 2, 8) * mix(0.45, 1.2, (y - 151) / 122));
+      items.push({ kind, x, y, size: Math.max(2, size), seed: integer(random, 1, 2 ** 30) });
+    }
+
+    items.sort((a, b) => a.y - b.y);
+    return { code, hills, farTrees, fringe, paths, nearPath, items, houses, gardens, sway,
+      texture: integer(random, 1, 2 ** 30), atmosphere: createAtmosphere(random) };
+  }
+
+  function generatePaths(houses, gardens, fringe, random) {
+    const step = 2;
+    const cols = W / step;
+    const top = 136;
+    const rows = (H - top) / step;
+    const cells = cols * rows;
+    const blocked = new Uint8Array(cells);
+    const traffic = new Uint8Array(cells);
+    const terrain = Float32Array.from({ length: cells }, () => between(random, 0.85, 1.5));
+    const bounds = houses.map(house => houseBounds(house, 3));
+    for (let i = 0; i < cells; i++) {
+      const x = (i % cols) * step;
+      const y = Math.floor(i / cols) * step + top;
+      blocked[i] = y < fringe(x) + 1 || bounds.some(b => x > b.left && x < b.right && y > b.top && y < b.bottom) ||
+        gardens.some(g => x > g.left - 3 && x < g.right + 3 && y > g.top - 3 && y < g.bottom + 3);
+    }
+    const cell = point => clamp(Math.round((point.y - top) / step), 0, rows - 1) * cols +
+      clamp(Math.round(point.x / step), 0, cols - 1);
+    const points = houses.map(house => {
+      const door = houseDoor(house);
+      return { x: door.x, y: house.y + 9, door };
+    });
+    const edges = [];
+    const linked = new Set([0]);
+    while (linked.size < points.length) {
+      let nearest;
+      let best = Infinity;
+      for (const a of linked) {
+        for (let b = 0; b < points.length; b++) {
+          if (linked.has(b)) continue;
+          const distance = Math.hypot(points[a].x - points[b].x, (points[a].y - points[b].y) * 1.4);
+          if (distance < best) { best = distance; nearest = [a, b]; }
+        }
+      }
+      edges.push(nearest);
+      linked.add(nearest[1]);
+    }
+    if (houses.length > 5 && random() < 0.7) edges.push([0, houses.length - 1]);
+    const exits = integer(random, 2, 3);
+    for (let i = 0; i < exits; i++) {
+      const exit = i === 0 ? { x: integer(random, 65, W - 65), y: H - 2 }
+        : { x: i === 1 ? 2 : W - 4, y: integer(random, 194, 254) };
+      let nearest = 0;
+      for (let n = 1; n < points.length; n++) {
+        if (Math.hypot(points[n].x - exit.x, points[n].y - exit.y) <
+          Math.hypot(points[nearest].x - exit.x, points[nearest].y - exit.y)) nearest = n;
+      }
+      edges.push([nearest, points.length]);
+      points.push(exit);
+    }
+    const routes = [];
+    const directions = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]];
+    for (const [a, b] of edges) {
+      const start = cell(points[a]);
+      const end = cell(points[b]);
+      const cost = new Float32Array(cells).fill(Infinity);
+      const parents = new Int32Array(cells).fill(-1);
+      const closed = new Uint8Array(cells);
+      const open = new Set([start]);
+      cost[start] = 0;
+      const heuristic = n => Math.hypot(n % cols - end % cols, Math.floor(n / cols) - Math.floor(end / cols)) * 0.55;
+      while (open.size) {
+        let current = -1;
+        let lowest = Infinity;
+        for (const n of open) {
+          const estimate = cost[n] + heuristic(n);
+          if (estimate < lowest) { lowest = estimate; current = n; }
+        }
+        if (current === end) break;
+        open.delete(current);
+        closed[current] = 1;
+        const x = current % cols;
+        const y = Math.floor(current / cols);
+        for (const [dx, dy] of directions) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
+          const next = ny * cols + nx;
+          if (closed[next] || (blocked[next] && next !== end)) continue;
+          if (dx && dy && (blocked[y * cols + nx] || blocked[ny * cols + x])) continue;
+          const weight = traffic[next] ? 0.57 : terrain[next];
+          const candidate = cost[current] + weight * (dx && dy ? 1.414 : 1);
+          if (candidate >= cost[next]) continue;
+          cost[next] = candidate;
+          parents[next] = current;
+          open.add(next);
+        }
+      }
+      if (parents[end] < 0 && start !== end) continue;
+      const route = [];
+      for (let n = end; n !== -1; n = parents[n]) {
+        route.push({ x: n % cols * step, y: Math.floor(n / cols) * step + top });
+        traffic[n] = 1;
+        if (n === start) break;
+      }
+      route.reverse();
+      route.unshift(points[a].door || points[a]);
+      route.push(points[b].door || points[b]);
+      routes.push(route);
+    }
+    const mask = new Uint8Array(W * H);
+    for (const route of routes) {
+      for (let i = 1; i < route.length; i++) {
+        const a = route[i - 1];
+        const b = route[i];
+        const distance = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y)));
+        for (let s = 0; s <= distance; s++) {
+          const x = Math.round(mix(a.x, b.x, s / distance));
+          const y = Math.round(mix(a.y, b.y, s / distance));
+          const radius = mix(0.65, 1.7, clamp((y - 150) / 120));
+          for (let dy = -2; dy <= 2; dy++) {
+            for (let dx = -2; dx <= 2; dx++) {
+              if (Math.hypot(dx, dy) > radius || x + dx < 0 || x + dx >= W || y + dy < 0 || y + dy >= H) continue;
+              mask[(y + dy) * W + x + dx] = 1;
+            }
+          }
+        }
+      }
+    }
+    return { mask, routes };
+  }
+
+  function createAtmosphere(random) {
+    return {
+      stars: Array.from({ length: 126 }, () => ({
+        x: integer(random, 2, W - 3), y: integer(random, 4, 92), tone: random(), flicker: between(random, 0, 6.28)
+      })),
+      drops: Array.from({ length: 148 }, () => ({
+        x: between(random, 0, W + 80), y: between(random, 0, H + 50),
+        speed: between(random, 85, 195), length: integer(random, 2, 7), tone: random()
+      })),
+      fog: Array.from({ length: 7 }, (_, i) => ({
+        x: integer(random, -60, W + 20), y: integer(random, 127, 154) + i * 10,
+        width: integer(random, 70, 153), depth: integer(random, 3, 9), speed: between(random, 2, 6)
+      })),
+      schedule: [
+        { at: 4.0, duration: between(random, 3.6, 4.9), fog: between(random, 0.6, 0.95), rain: 0 },
+        { at: between(random, 10.8, 13.2), duration: between(random, 3.2, 4.3), fog: 0.08, rain: between(random, 0.74, 1) },
+        { at: between(random, 17.2, 19.1), duration: between(random, 2.3, 3.6), fog: 0.12, rain: 0 }
+      ],
+      nightFront: { at: between(random, 1.8, 3.15), peak: between(random, 3.7, 5) }
+    };
+  }
+
+  function tiledNoise(random, columns, rows) {
+    const values = Float32Array.from({ length: columns * (rows + 1) }, random);
+    return (x, y) => {
+      const fx = wrap(x, CLOUD_TILE) / CLOUD_TILE * columns;
+      const fy = clamp(y / SKY_HEIGHT) * (rows - 0.001);
+      const x0 = Math.floor(fx);
+      const x1 = (x0 + 1) % columns;
+      const y0 = Math.floor(fy) * columns;
+      const sx = smooth(fx % 1);
+      return mix(mix(values[y0 + x0], values[y0 + x1], sx),
+        mix(values[y0 + columns + x0], values[y0 + columns + x1], sx), smooth(fy % 1));
+    };
+  }
+
+  function cloudTexture(paint, speed) {
+    const canvas = makeCanvas(CLOUD_TILE, SKY_HEIGHT);
+    const g = canvas.getContext('2d');
+    const image = g.createImageData(CLOUD_TILE, SKY_HEIGHT);
+    const opacity = new Uint8Array(CLOUD_TILE * SKY_HEIGHT);
+    function stamp(x, y, alpha, tone) {
+      if (y < 0 || y >= SKY_HEIGHT) return;
+      const position = y * CLOUD_TILE + wrap(x, CLOUD_TILE);
+      const strength = Math.round(clamp(alpha) * 255);
+      if (strength === 0) return;
+      const offset = position * 4;
+      const shade = opacity[position] ? mix(image.data[offset], tone, strength / 425) : tone;
+      image.data[offset] = shade;
+      image.data[offset + 1] = shade;
+      image.data[offset + 2] = shade;
+      opacity[position] = Math.max(opacity[position], strength);
+      image.data[offset + 3] = opacity[position];
+    }
+    paint(stamp);
+    g.putImageData(image, 0, 0);
+    return { canvas, opacity, speed };
+  }
+
+  function paintCirrus(random, stamp) {
+    for (let tuft = 0; tuft < 11; tuft++) {
+      const x = tuft * 71 + integer(random, -40, 24);
+      const y = integer(random, 8, 74);
+      const length = integer(random, 48, 147);
+      const slope = between(random, -0.27, -0.08);
+      const strands = integer(random, 5, 10);
+      for (let strand = 0; strand < strands; strand++) {
+        const start = integer(random, 0, Math.floor(length * 0.42));
+        const end = length - integer(random, 0, Math.floor(length * 0.44));
+        const arc = between(random, 3, 13);
+        const spread = strand * between(random, 0.58, 1.14);
+        for (let dx = start; dx <= end; dx++) {
+          const t = (dx - start) / Math.max(1, end - start);
+          const height = Math.round(y + spread + dx * slope + t * t * arc);
+          const density = Math.sin(t * Math.PI) ** 0.75 * mix(0.84, 0.39, strand / strands);
+          const shade = 187 + (strand % 3) * 13;
+          stamp(x + dx, height, density, shade);
+          stamp(x + dx, height + 1, density * 0.37, shade - 17);
+        }
+      }
+    }
+  }
+
+  function paintCumulus(random, stamp, noise) {
+    function puff(cx, cy, rx, ry, shade) {
+      for (let y = Math.ceil(cy - ry); y <= cy + ry; y++) {
+        for (let x = Math.ceil(cx - rx); x <= cx + rx; x++) {
+          const nx = (x - cx) / rx;
+          const ny = (y - cy) / ry;
+          const grain = noise(x, y);
+          const edge = Math.hypot(nx, ny) + (grain - 0.5) * 0.14;
+          if (edge >= 1) continue;
+          const tone = shade + (-ny * 0.74 - nx * 0.17) * 46 + (grain - 0.5) * 39;
+          stamp(x, y, smooth((1 - edge) * 14) * 0.99, tone);
+        }
+      }
+    }
+    for (let i = 0; i < 9; i++) {
+      const x = i * 87 + integer(random, -31, 32);
+      const y = integer(random, 27, 115);
+      const width = integer(random, 33, 92);
+      const height = integer(random, 9, 26);
+      puff(x, y, width * 0.66, height * 0.37, 114);
+      for (let lobe = 0; lobe < 6; lobe++) {
+        const t = lobe / 5;
+        const lift = Math.sin(t * Math.PI) * between(random, 0.38, 0.8);
+        puff(x + (t - 0.5) * width * 1.06, y - height * lift, width * between(random, 0.13, 0.29),
+          height * between(random, 0.29, 0.74) * (0.58 + lift), between(random, 133, 177));
+      }
+      puff(x + width * 0.09, y + height * 0.16, width * 0.48, height * 0.23, 94);
+    }
+  }
+
+  function generateCloudLayers(code) {
+    const random = randomFrom(hash(code + '/небо'));
+    const billow = tiledNoise(random, 10, 5);
+    const streak = tiledNoise(random, 17, 12);
+    const detail = tiledNoise(random, 51, 24);
+    const fine = tiledNoise(random, 124, 52);
+    const field = new Float32Array(CLOUD_TILE * SKY_HEIGHT);
+    for (let y = 0; y < SKY_HEIGHT; y++) {
+      for (let x = 0; x < CLOUD_TILE; x++) {
+        const drift = (streak(x, y) - 0.5) * 34;
+        field[y * CLOUD_TILE + x] = 0.53 * billow(x + drift, y) +
+          0.28 * streak(x + y * 0.61, y) + 0.14 * detail(x, y) + 0.05 * fine(x, y);
+      }
+    }
+    const sorted = field.slice().sort();
+    const thresholds = [sorted[Math.floor(sorted.length * 0.49)], sorted[Math.floor(sorted.length * 0.17)], 0];
+    const banks = thresholds.map((threshold, type) => cloudTexture(stamp => {
+      for (let y = 0; y < SKY_HEIGHT; y++) {
+        for (let x = 0; x < CLOUD_TILE; x++) {
+          const value = field[y * CLOUD_TILE + x];
+          const alpha = type === 2 ? 1 : smooth((value - threshold + 0.014) / 0.044);
+          if (alpha === 0) continue;
+          const slope = field[y * CLOUD_TILE + wrap(x - 4, CLOUD_TILE)] -
+            field[Math.min(SKY_HEIGHT - 1, y + 3) * CLOUD_TILE + wrap(x + 3, CLOUD_TILE)];
+          const ripples = Math.floor((streak(x - y * 0.42, y) - 0.5) * 6) * 9;
+          const tone = 140 + (value - 0.5) * 161 + slope * 255 + ripples - type * 12;
+          stamp(x, y, alpha, tone);
+        }
+      }
+    }, 1.6));
+    return [null, cloudTexture(stamp => paintCirrus(random, stamp), 1.35),
+      cloudTexture(stamp => paintCumulus(random, stamp, detail), 2.2), ...banks];
+  }
+
+  function drawDistantLand(g, world, palette) {
+    for (let i = 0; i < world.hills.length; i++) {
+      const ridge = world.hills[i];
+      polygon(g, palette.hills[i], [...ridge, [W + 35, 169], [-35, 169]]);
+      const shade = i === 0 ? palette.hills[1] : palette.hills[i - 1];
+      g.globalAlpha = i === 0 ? 0.2 : 0.25;
+      for (let segment = 4; segment < ridge.length - 9; segment += 9) {
+        const [x, y] = ridge[segment];
+        const [rightX, rightY] = ridge[segment + 3];
+        if (rightY < y - 2) continue;
+        polygon(g, shade, [...ridge.slice(segment, segment + 4), [rightX + 16, rightY + 8],
+          [x + 25, y + 4], [x + 18, y + 7]]);
+      }
+      g.globalAlpha = 1;
+    }
+    g.globalAlpha = 0.22;
+    for (let i = 0; i < 6; i++) {
+      const y = 103 + i * 4;
+      pixels(g, palette.mist, 19 + (i * 67) % 220, y, 130 - i * 9, 1);
+    }
+    g.globalAlpha = 1;
+
+    for (const { x, y, height, width, layer } of world.farTrees) {
+      const color = palette.season === 'autumn' && Math.abs(x * 17 + y * 3) % 7 > 2
+        ? colors[palette.phase].forest[layer] : palette.forest[layer];
+      polygon(g, color, [[x, y - height], [x + width * 0.58, y - height * 0.41],
+        [x + width * 0.41, y - height * 0.42], [x + width, y], [x - width, y],
+        [x - width * 0.46, y - height * 0.41], [x - width * 0.63, y - height * 0.39]]);
+      if (palette.season === 'winter') {
+        pixels(g, palette.snow[1], x, y - height);
+        if (layer === 2 && Math.abs(x) % 3 === 0) {
+          pixels(g, palette.snow[1], x - 1, y - height * 0.38, 2);
+        }
+      }
+    }
+  }
+
+  function drawMeadow(g, world, palette) {
+    const { fringe, paths, gardens } = world;
+    const random = randomFrom(world.texture);
+    const meadowEdge = Array.from({ length: 121 }, (_, i) => [i * 4, Math.round(fringe(i * 4))]);
+    polygon(g, palette.grass[0], [...meadowEdge, [W, H], [0, H]]);
+    const bands = [[8, 1], [24, 2], [37, 1], [52, 5], [85, 0], [109, 4]];
+    for (const [offset, color] of bands) {
+      const points = meadowEdge.map(([x, y]) => [x, y + offset + Math.round(Math.sin(x / 40 + offset) * 5)]);
+      polygon(g, palette.grass[color], [...points, [W, H + 14], [0, H + 14]]);
+    }
+    for (let i = 0; i < 104; i++) {
+      const x = integer(random, -12, W + 12);
+      const y = integer(random, 144, H + 8);
+      if (y < fringe(x) + 2) continue;
+      const width = integer(random, 10, 63);
+      const depth = integer(random, 1, 8);
+      g.globalAlpha = between(random, 0.29, 0.56);
+      polygon(g, pick(random, palette.grass), [[x - width, y], [x - width * 0.72, y - depth * 0.55],
+        [x - width * 0.37, y - depth * 0.65], [x - width * 0.12, y - depth],
+        [x + width * 0.15, y - depth * 0.53], [x + width * 0.48, y - depth * 0.5],
+        [x + width * 0.87, y], [x + width * 0.38, y + depth * 0.42], [x, y + depth * 0.63]]);
+    }
+    g.globalAlpha = 1;
+
+    for (let y = 137; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (!paths.mask[y * W + x]) continue;
+        const edge = x === 0 || x === W - 1 || !paths.mask[y * W + x - 1] || !paths.mask[y * W + x + 1];
+        pixels(g, palette.path[edge ? 3 : 1], x, y);
+      }
+    }
+    for (const garden of gardens) {
+      if (palette.season === 'winter') {
+        pixels(g, palette.snow[1], garden.left + 1, garden.top + 1,
+          garden.right - garden.left - 2, garden.bottom - garden.top - 2);
+        for (let y = garden.top + 3; y < garden.bottom - 1; y += 4) {
+          pixels(g, palette.snow[0], garden.left + 3, y, garden.right - garden.left - 6);
+        }
+        continue;
+      }
+      pixels(g, palette.path[0], garden.left + 1, garden.top + 1,
+        garden.right - garden.left - 2, garden.bottom - garden.top - 2);
+      const plants = randomFrom(garden.seed);
+      for (let y = garden.top + 3; y < garden.bottom - 1; y += 3) {
+        pixels(g, palette.wood[0], garden.left + 3, y, garden.right - garden.left - 6);
+        for (let x = garden.left + 4; x < garden.right - 2; x += 3) {
+          pixels(g, pick(plants, [palette.leaf[2], palette.leaf[3], palette.grass[3]]), x, y - 1,
+            palette.season === 'spring' ? 1 : 2);
+          pixels(g, palette.leaf[0], x + 1, y);
+        }
+      }
+    }
+
+    for (let i = 0; i < 2790; i++) {
+      const x = integer(random, 0, W - 1);
+      const y = integer(random, 139, H - 1);
+      if (y < fringe(x) + 1) continue;
+      const depth = clamp((y - 142) / 128);
+      const nearPath = paths.mask[y * W + x];
+      if (gardens.some(garden => x > garden.left && x < garden.right && y > garden.top && y < garden.bottom)) continue;
+      if (nearPath) {
+        pixels(g, pick(random, palette.path), x, y, random() < 0.18 ? 2 : 1);
+        continue;
+      }
+      const shade = pick(random, palette.grass);
+      pixels(g, shade, x, y, integer(random, 1, Math.floor(2 + depth * 3)));
+      if (random() < 0.24 && depth > 0.16 && palette.season !== 'winter') {
+        const blade = pick(random, [palette.grass[4], palette.grass[5], palette.pine[3]]);
+        pixels(g, blade, x, y - 1, 1, depth > 0.65 ? 3 : 2);
+        pixels(g, blade, x + 1, y, 2);
+        if (random() < 0.17) {
+          pixels(g, pick(random, palette.flowers), x, y - 2, depth > 0.7 ? 2 : 1);
+        }
+      }
+    }
+    if (palette.season === 'autumn') {
+      for (const tree of world.items.filter(item => item.kind === 'leaf')) {
+        const leaves = randomFrom(tree.seed);
+        const shades = treeLeafColors(tree, palette);
+        for (let i = 0; i < tree.height * 1.7; i++) {
+          const dx = (leaves() - leaves()) * tree.width * 0.9;
+          const dy = (leaves() - leaves()) * tree.width * 0.22;
+          pixels(g, pick(leaves, shades.slice(1)), tree.x + dx, tree.y + dy, leaves() > 0.6 ? 2 : 1);
+        }
+      }
+    }
+  }
+
+  function groundShadow(g, palette, x, y, width, depth) {
+    g.globalAlpha = 0.43;
+    ellipse(g, palette.shadow, x + width * 0.3, y, width, depth);
+    g.globalAlpha = 1;
+  }
+
+  function drawPine(g, item, palette, contact = true) {
+    const { x, y, height: h, tint } = item;
+    const half = item.width * 0.5;
+    const random = randomFrom(item.seed);
+    const top = y - h;
+    const trunk = Math.max(1, Math.round(h / 19));
+    const shade = palette.pine;
+    const bend = integer(random, -Math.ceil(half * 0.25), Math.ceil(half * 0.25));
+    if (contact) groundShadow(g, palette, x, y, half * 0.9, Math.max(1, h * 0.04));
+    trace(g, palette.wood[0], x + bend * 0.2, y - h * 0.51, x, y, trunk);
+    if (h > 26) pixels(g, palette.wood[2], x, y - h * 0.13, 1, h * 0.13);
+
+    const layers = h > 44 ? 6 : h > 23 ? 5 : 4;
+    for (let i = layers - 1; i >= 0; i--) {
+      const t = i / (layers - 1);
+      const apexX = x + Math.round(bend * (1 - t));
+      const apex = top + Math.round(h * t * 0.6);
+      const level = apex + Math.round(h * mix(0.28, 0.34, t));
+      const span = half * mix(0.26, 1, t);
+      const left = apexX - span * between(random, 0.8, 1.06);
+      const right = apexX + span * between(random, 0.9, 1.13);
+      polygon(g, shade[0], [[apexX, apex], [right - span * 0.25, level - h * 0.075],
+        [right, level - 1], [right - span * 0.22, level + 1], [right - span * 0.47, level - 1],
+        [right - span * 0.42, level + 2], [apexX, level + 1], [left + span * 0.25, level + 3],
+        [left + span * 0.31, level], [left, level + 1], [left + span * 0.33, level - h * 0.075]]);
+      polygon(g, shade[1 + (tint === 2 ? 1 : 0)], [[apexX, apex + 1], [right - span * 0.46, level - h * 0.08],
+        [right - span * 0.16, level - 1], [right - span * 0.47, level - 2], [right - span * 0.61, level + 1],
+        [apexX - span * 0.15, level - 1], [left + span * 0.13, level], [left + span * 0.39, level - h * 0.08]]);
+      polygon(g, shade[tint === 0 ? 2 : 3], [[apexX, apex + 1], [apexX + span * 0.13, level - h * 0.13],
+        [apexX - span * 0.14, level - h * 0.075], [left + span * 0.21, level - h * 0.075 + 2],
+        [left + span * 0.42, level - h * 0.13]]);
+      if (h > 31) {
+        for (let j = 0; j < Math.ceil(span * 0.42); j++) {
+          const distance = between(random, -0.66, 0.6);
+          const py = level - between(random, 2, h * 0.13) * (1 - Math.abs(distance));
+          pixels(g, shade[distance < 0 ? 3 : 1], apexX + span * distance, py, integer(random, 1, 3));
+        }
+      }
+    }
+    if (h > 25) pixels(g, shade[3], x + bend, top + 2, 1, Math.ceil(h * 0.055));
+  }
+
+  function drawLeafTree(g, item, palette, contact = true) {
+    if (palette.season === 'winter') {
+      drawBareTree(g, item, palette, contact);
+      return;
+    }
+    const { x, y, height: h } = item;
+    const random = randomFrom(item.seed);
+    const half = item.width * 0.66;
+    const cy = y - h * 0.62;
+    const shade = treeLeafColors(item, palette);
+    if (contact) groundShadow(g, palette, x, y, half, Math.max(1, h * 0.046));
+    const trunk = Math.max(1, Math.round(h / 13));
+    trace(g, palette.wood[0], x - h * 0.043, cy, x, y, trunk);
+    trace(g, palette.wood[1], x - h * 0.04, cy + h * 0.1, x, y - 1, Math.max(1, trunk - 1));
+    trace(g, palette.wood[0], x, y - h * 0.17, x + half * 0.68, cy + 2, Math.max(1, trunk - 1));
+    trace(g, palette.wood[2], x - 1, y - h * 0.32, x - half * 0.7, cy + h * 0.09);
+    ellipse(g, shade[0], x, cy, half, h * 0.31);
+    for (let i = 0; i < 12; i++) {
+      const angle = between(random, 0, 6.28);
+      const px = x + Math.cos(angle) * half * between(random, 0.15, 0.85);
+      const py = cy + Math.sin(angle) * h * between(random, 0.05, 0.225);
+      const radius = between(random, 0.19, 0.44) * half;
+      const tone = py < cy + 1 ? pick(random, [2, 2, 3]) : pick(random, [0, 1, 2]);
+      ellipse(g, shade[tone], px, py, radius, radius * 0.81);
+      if (h > 26 && tone > 1) {
+        pixels(g, shade[Math.min(tone + 1, 4)], px - radius * 0.4, py - radius * 0.4,
+          Math.max(1, radius * 0.55));
+      }
+      if (palette.season === 'spring' && item.seed % 4 === 0 && tone > 1) {
+        pixels(g, palette.flowers[i % 3], px, py - 1, 2);
+      }
+    }
+  }
+
+  function drawBareTree(g, item, palette, contact) {
+    const { x, y, height: h } = item;
+    const wood = palette.wood;
+    const random = randomFrom(item.seed);
+    const trunk = Math.max(1, Math.round(h / 16));
+    if (contact) groundShadow(g, palette, x, y, item.width * 0.55, Math.max(1, h * 0.04));
+    trace(g, wood[0], x, y, x - h * 0.04, y - h * 0.91, trunk);
+    trace(g, wood[2], x, y - 1, x - h * 0.04, y - h * 0.88);
+    for (let i = 0; i < 8; i++) {
+      const direction = i % 2 ? 1 : -1;
+      const startY = y - h * (0.25 + i * 0.074);
+      const span = item.width * between(random, 0.25, 0.62) * (1 - i * 0.055);
+      const endX = x + direction * span;
+      const endY = startY - h * between(random, 0.13, 0.25);
+      trace(g, wood[1], x - 1, startY, endX, endY, h > 45 ? 2 : 1);
+      trace(g, wood[2], endX, endY, endX + direction * span * 0.19, endY - h * 0.1);
+      trace(g, wood[1], mix(x, endX, 0.68), mix(startY, endY, 0.68),
+        endX - direction * span * 0.15, endY - h * 0.12);
+      trace(g, palette.snow[0], x - 1, startY - 1, mix(x, endX, 0.76), mix(startY, endY, 0.76) - 1);
+    }
+    ellipse(g, palette.snow[0], x, y, trunk + 2, 1);
+  }
+
+  function drawRock(g, item, palette) {
+    const { x, y, size } = item;
+    const random = randomFrom(item.seed);
+    const h = Math.max(2, Math.round(size * between(random, 0.4, 0.78)));
+    const s = size * 0.63;
+    const peak = x + between(random, -s * 0.35, s * 0.2);
+    const shade = palette.stone;
+    groundShadow(g, palette, x, y, s * 1.12, Math.max(1, h * 0.22));
+    polygon(g, shade[0], [[x - s - 1, y], [x - s, y - h * 0.64], [peak, y - h],
+      [x + s * 0.67, y - h * 0.84], [x + s, y - 1], [x + s * 0.68, y + 1]]);
+    polygon(g, shade[2], [[x - s, y - h * 0.64], [peak, y - h], [x + s * 0.67, y - h * 0.84],
+      [x + s * 0.24, y - h * 0.43], [x - s * 0.31, y - h * 0.43]]);
+    polygon(g, shade[1], [[x - s, y - h * 0.64], [x - s * 0.31, y - h * 0.43],
+      [x + s * 0.24, y - h * 0.43], [x + s * 0.35, y], [x - s * 0.9, y]]);
+    if (size > 8) {
+      trace(g, shade[3], x - s * 0.57, y - h * 0.72, peak, y - h + 1);
+      trace(g, shade[0], x + s * 0.23, y - h * 0.37, x + s * 0.36, y - 1);
+      pixels(g, palette.grass[4], x - s * 0.76, y, size * 0.32);
+      pixels(g, palette.grass[5], x - s * 0.6, y - 1, size * 0.22);
+    }
+  }
+
+  function drawUnderstory(g, item, palette) {
+    const { x, y, size, kind } = item;
+    if (kind === 'stump') {
+      groundShadow(g, palette, x, y, size * 0.68, 1);
+      const width = Math.max(2, Math.round(size * 0.7));
+      const height = Math.max(2, Math.round(size * 0.7));
+      pixels(g, palette.wood[0], x, y - height, width, height + 1);
+      pixels(g, palette.wood[2], x - 1, y - height, width, 1);
+      pixels(g, palette.wood[4], x, y - height - 1, Math.max(1, width - 1));
+      return;
+    }
+    const random = randomFrom(item.seed);
+    const shade = palette.leaf;
+    ellipse(g, shade[0], x, y - size * 0.38, size * 0.83, size * 0.5);
+    for (let i = 0; i < 4; i++) {
+      ellipse(g, shade[i < 2 ? 1 : 2], x + between(random, -0.67, 0.67) * size,
+        y - size * between(random, 0.26, 0.78), size * between(random, 0.23, 0.44), Math.max(1, size * 0.23));
+    }
+    if (size > 4) pixels(g, shade[3], x - 1, y - size, 2);
+  }
+
+  function drawFence(g, item, palette) {
+    const { a, b, height, gate } = item;
+    const wood = palette.wood;
+    for (const rail of [0.33, 0.72]) {
+      for (const [from, to] of gate ? [[0, 0.35], [0.65, 1]] : [[0, 1]]) {
+        trace(g, wood[1], mix(a[0], b[0], from), mix(a[1], b[1], from) - height * rail,
+          mix(a[0], b[0], to), mix(a[1], b[1], to) - height * rail);
+        trace(g, wood[3], mix(a[0], b[0], from), mix(a[1], b[1], from) - height * rail - 1,
+          mix(a[0], b[0], to), mix(a[1], b[1], to) - height * rail - 1);
+      }
+    }
+    const posts = Math.max(2, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 6));
+    for (let i = 0; i <= posts; i++) {
+      if (gate && i / posts > 0.36 && i / posts < 0.64) continue;
+      const px = mix(a[0], b[0], i / posts);
+      const py = mix(a[1], b[1], i / posts);
+      pixels(g, wood[0], px, py - height, 2, height + 2);
+      pixels(g, wood[3], px, py - height, 1, height);
+      pixels(g, wood[4], px, py - height - 1);
+    }
+  }
+
+  function houseWindows(house, d) {
+    if (house.style === 'shed') return [{ x: d.left + 3, y: -d.wall + 5, w: 3, h: 3 }];
+    if (house.view === 'side') return [
+      { x: d.left + 4, y: -d.wall + 5, w: 5, h: 5 },
+      { x: d.left + Math.floor(d.front * 0.43), y: -d.wall + 5, w: 5, h: 5 }
+    ];
+    const windows = [
+      { x: d.left + 4, y: -d.wall + 6, w: house.style === 'lodge' ? 6 : 5, h: 5 },
+      { x: d.peak - 1, y: -d.wall - Math.round(d.roof * 0.45), w: 3, h: 3 }
+    ];
+    if (house.style === 'lodge') windows.push({ x: d.left + 14, y: -d.wall + 6, w: 6, h: 5 });
+    return windows;
+  }
+
+  function drawHouse(g, house, palette, contact = true) {
+    if (house.view === 'side') {
+      drawSideHouse(g, house, palette, contact);
+      return;
+    }
+    const d = dimensions(house);
+    const { left, right, depth, wall, roof, peak, rise, style, front } = d;
+    const wood = palette.wood;
+    const tile = palette.roofs[house.roofVariant];
+    const rock = palette.stone;
+    const random = randomFrom(house.seed);
+    const eave = 2;
+    const doorX = left + Math.floor(front * 0.7);
+    const doorWidth = house.style === 'lodge' ? 7 : 5;
+    const doorHeight = house.style === 'shed' ? 7 : 10;
+    if (contact) groundShadow(g, palette, house.x + 3, house.y - 1, (front + depth) * 0.61, 5);
+    g.save();
+    g.translate(house.x, house.y);
+    g.scale(house.face, 1);
+
+    polygon(g, rock[0], [[left - 1, -4], [right, -4], [right + depth + 1, -4 - rise],
+      [right + depth + 1, -rise], [right, 1], [left - 1, 1]]);
+    polygon(g, wood[1], [[right, -wall], [right + depth, -wall - rise], [right + depth, -rise - 2], [right, -2]]);
+    pixels(g, wood[3], left, -wall, front, wall - 2);
+    polygon(g, wood[2], [[left, -wall], [peak, -wall - roof], [right, -wall]]);
+    for (let y = -wall + 2; y < -2; y += 3) {
+      pixels(g, wood[1], left, y, front);
+      pixels(g, wood[4], left + 1, y - 1, front - 2);
+      trace(g, wood[0], right, y, right + depth - 1, y - rise);
+      trace(g, wood[2], right + 1, y + 1, right + depth - 1, y + 1 - rise);
+      const knotX = integer(random, left + 3, right - 4);
+      pixels(g, wood[2], knotX, y + 1, integer(random, 1, 3));
+    }
+    for (let y = -wall - roof + 3; y < -wall; y += 3) {
+      const taper = (-wall - y) / roof;
+      pixels(g, wood[1], mix(left + 2, peak, taper), y, Math.max(1, (front - 4) * (1 - taper)));
+    }
+    pixels(g, wood[5], left, -wall + 1, 2, wall - 3);
+    pixels(g, wood[2], right - 2, -wall + 1, 2, wall - 3);
+    for (let x = left + 1; x < right; x += 4) {
+      pixels(g, pick(random, rock), x, -2, Math.min(3, right - x), integer(random, 1, 2));
+    }
+
+    if (style.chimney) {
+      const x = peak + Math.round(depth * 0.68);
+      const y = -wall - roof - rise - 6;
+      pixels(g, rock[0], x, y, 5, 16);
+      pixels(g, rock[2], x, y + 1, 3, 13);
+      pixels(g, rock[3], x - 1, y, 6, 2);
+      pixels(g, rock[1], x, y + 5, 3);
+    }
+    polygon(g, tile[0], [[left - eave, -wall + 1], [peak, -wall - roof - 2],
+      [peak + depth + 2, -wall - roof - rise - 2], [right + depth + 2, -wall - rise],
+      [right + eave, -wall + 2], [right - 1, -wall + 1], [peak, -wall - roof], [left + 1, -wall + 1]]);
+    polygon(g, tile[2], [[peak, -wall - roof - 1], [peak + depth + 1, -wall - roof - rise - 1],
+      [right + depth + 1, -wall - rise - 1], [right + eave - 1, -wall]]);
+    for (let row = 1; row < roof; row += 3) {
+      const t = row / roof;
+      const x = mix(peak + 1, right + eave - 1, t);
+      const y = -wall - roof + row;
+      trace(g, tile[1], x, y, x + depth - 1, y - rise);
+      for (let n = integer(random, 1, 3); n < depth - 1; n += integer(random, 2, 5)) {
+        pixels(g, pick(random, [tile[1], tile[3]]), x + n, y - (n / depth) * rise - 1, 2);
+      }
+    }
+    trace(g, tile[3], peak, -wall - roof - 2, peak + depth + 1, -wall - roof - rise - 2);
+    trace(g, wood[5], left - eave, -wall, peak, -wall - roof - 1);
+    trace(g, wood[3], peak, -wall - roof - 1, right + eave, -wall);
+    trace(g, tile[0], right + eave, -wall + 1, right + depth + 2, -wall - rise + 1);
+
+    pixels(g, wood[0], doorX - 1, -doorHeight - 2, doorWidth + 2, doorHeight + 2);
+    pixels(g, wood[1], doorX, -doorHeight - 1, doorWidth, doorHeight);
+    pixels(g, wood[2], doorX + 1, -doorHeight, 1, doorHeight - 2);
+    pixels(g, wood[5], doorX + doorWidth - 2, -4);
+    pixels(g, rock[1], doorX - 2, 0, doorWidth + 4, 2);
+    pixels(g, rock[2], doorX - 2, 0, doorWidth + 4);
+
+    for (const { x, y, w, h } of houseWindows(house, d)) {
+      pixels(g, wood[0], x - 1, y - 1, w + 2, h + 2);
+      pixels(g, palette.glass, x, y, w, h);
+      if (w > 3) pixels(g, wood[1], x + Math.floor(w / 2), y, 1, h);
+      pixels(g, wood[5], x - 1, y + h, w + 2);
+    }
+    if (style.porch) {
+      const start = doorX - 3;
+      polygon(g, tile[0], [[start, -doorHeight - 2], [start + 3, -doorHeight - 5],
+        [right, -doorHeight - 5], [right + 1, -doorHeight - 2]]);
+      pixels(g, tile[3], start + 1, -doorHeight - 3, right - start);
+      pixels(g, wood[4], start, -doorHeight - 1, 1, doorHeight + 2);
+      pixels(g, wood[3], right, -doorHeight - 1, 1, doorHeight + 2);
+    }
+    g.restore();
+  }
+
+  function drawSideHouse(g, house, palette, contact) {
+    const d = dimensions(house);
+    const { left, right, wall, roof, style, front } = d;
+    const wood = palette.wood;
+    const tile = palette.roofs[house.roofVariant];
+    const random = randomFrom(house.seed);
+    if (contact) groundShadow(g, palette, house.x, house.y, front * 0.65, 4);
+    g.save();
+    g.translate(house.x, house.y);
+    g.scale(house.face, 1);
+    pixels(g, palette.stone[0], left - 1, -3, front + 2, 4);
+    pixels(g, wood[2], left, -wall, front, wall - 2);
+    for (let y = -wall + 2; y < -3; y += 3) {
+      pixels(g, wood[0], left, y, front);
+      pixels(g, wood[4], left, y - 1, front);
+      pixels(g, wood[1], integer(random, left + 2, right - 3), y + 1, 2);
+    }
+    if (style.chimney) {
+      pixels(g, palette.stone[1], right - 10, -wall - roof - 6, 4, 12);
+      pixels(g, palette.stone[3], right - 11, -wall - roof - 7, 6, 2);
+    }
+    polygon(g, tile[0], [[left - 3, -wall + 1], [left + 2, -wall - roof],
+      [right - 2, -wall - roof], [right + 3, -wall + 1]]);
+    polygon(g, tile[2], [[left - 2, -wall - 1], [left + 3, -wall - roof + 1],
+      [right - 3, -wall - roof + 1], [right + 2, -wall - 1]]);
+    for (let row = 2; row < roof; row += 3) {
+      const y = -wall - row;
+      const inset = row / roof * 4;
+      trace(g, tile[1], left - 2 + inset, y, right + 2 - inset, y);
+      for (let x = left + 2 + (row % 2) * 2; x < right - 2; x += 5) {
+        pixels(g, pick(random, [tile[1], tile[3]]), x, y - 1, 2);
+      }
+    }
+    pixels(g, tile[3], left + 2, -wall - roof, front - 4);
+    pixels(g, wood[0], left - 3, -wall, front + 6, 2);
+    pixels(g, wood[5], left, -wall + 2, 1, wall - 5);
+    pixels(g, wood[4], right - 1, -wall + 2, 1, wall - 5);
+    const door = left + Math.floor(front * 0.7);
+    const height = Math.min(11, wall - 2);
+    pixels(g, wood[0], door - 1, -height - 1, 7, height + 1);
+    pixels(g, wood[1], door, -height, 5, height);
+    pixels(g, wood[3], door + 1, -height + 1, 1, height - 2);
+    pixels(g, wood[5], door + 4, -4);
+    pixels(g, palette.stone[2], door - 2, 0, 9, 2);
+    for (const { x, y, w, h } of houseWindows(house, d)) {
+      pixels(g, wood[0], x - 1, y - 1, w + 2, h + 2);
+      pixels(g, palette.glass, x, y, w, h);
+      pixels(g, wood[2], x + Math.floor(w / 2), y, 1, h);
+      pixels(g, wood[5], x - 1, y + h, w + 2);
+    }
+    g.restore();
+  }
+
+  function drawProp(g, item, palette, contact = true) {
+    switch (item.kind) {
+      case 'pine': drawPine(g, item, palette, contact); break;
+      case 'leaf': drawLeafTree(g, item, palette, contact); break;
+      case 'house': drawHouse(g, item, palette, contact); break;
+      case 'fence': drawFence(g, item, palette); break;
+      case 'rock': drawRock(g, item, palette); break;
+      default: drawUnderstory(g, item, palette);
+    }
+    if (palette.season === 'winter') drawSnowCover(g, item, palette);
+  }
+
+  function drawSnowCover(g, item, palette) {
+    const snow = palette.snow;
+    if (item.kind === 'house') {
+      const { left, right, front, depth, wall, roof, peak, rise } = dimensions(item);
+      g.save();
+      g.translate(item.x, item.y);
+      g.scale(item.face, 1);
+      if (item.view === 'side') {
+        polygon(g, snow[1], [[left - 3, -wall], [left + 1, -wall - roof - 1],
+          [right - 1, -wall - roof - 1], [right + 3, -wall]]);
+        pixels(g, snow[0], left + 1, -wall - roof - 2, front - 2, 2);
+        pixels(g, snow[0], left - 3, -wall - 1, front + 6, 2);
+      } else {
+        if (depth) {
+          polygon(g, snow[1], [[peak, -wall - roof - 2], [peak + depth + 2, -wall - roof - rise - 2],
+            [right + depth + 3, -wall - rise], [right + 2, -wall + 1]]);
+          trace(g, snow[0], peak, -wall - roof - 2, peak + depth + 2, -wall - roof - rise - 2, 2);
+          trace(g, snow[0], right + 1, -wall, right + depth + 2, -wall - rise, 2);
+        }
+        trace(g, snow[0], left - 3, -wall - 1, peak, -wall - roof - 2, 2);
+        trace(g, snow[0], peak, -wall - roof - 2, right + 2, -wall, 2);
+      }
+      for (const window of houseWindows(item, dimensions(item))) {
+        pixels(g, snow[0], window.x - 1, window.y + window.h + 1, window.w + 2);
+      }
+      g.restore();
+    } else if (item.kind === 'pine') {
+      const { x, y, height: h } = item;
+      const half = item.width * 0.5;
+      const random = randomFrom(item.seed);
+      const bend = integer(random, -Math.ceil(half * 0.25), Math.ceil(half * 0.25));
+      const layers = h > 44 ? 6 : h > 23 ? 5 : 4;
+      for (let i = layers - 1; i >= 0; i--) {
+        const t = i / (layers - 1);
+        const cx = x + Math.round(bend * (1 - t));
+        const top = y - h + Math.round(h * t * 0.6);
+        const base = top + Math.round(h * mix(0.28, 0.34, t));
+        const span = half * mix(0.26, 1, t);
+        polygon(g, snow[1], [[cx, top], [cx + span * 0.59, base - h * 0.07],
+          [cx + span * 0.24, base - h * 0.10], [cx + span * 0.1, base - h * 0.07],
+          [cx - span * 0.24, base - h * 0.1], [cx - span * 0.73, base - h * 0.06]]);
+        trace(g, snow[0], cx, top + 1, cx - span * 0.53, base - h * 0.10);
+      }
+    } else if (item.kind === 'rock' || item.kind === 'bush' || item.kind === 'stump') {
+      ellipse(g, snow[1], item.x, item.y - item.size * 0.55, item.size * 0.57, Math.max(1, item.size * 0.19));
+      pixels(g, snow[0], item.x - item.size * 0.35, item.y - item.size * 0.72, Math.max(2, item.size * 0.66));
+    } else if (item.kind === 'fence') {
+      trace(g, snow[0], item.a[0], item.a[1] - item.height - 1,
+        item.b[0], item.b[1] - item.height - 1);
+    }
+  }
+
+  function paintLand(world, palette) {
+    const terrain = makeCanvas();
+    const ground = terrain.getContext('2d');
+    drawDistantLand(ground, world, palette);
+    drawMeadow(ground, world, palette);
+    const sprites = world.items.map(item => {
+      let half = (item.width || item.size || 8) + 7;
+      let height = (item.height || item.size || 10) + 8;
+      let left = item.x - half;
+      let top = item.y - height;
+      let width = half * 2;
+      let bottom = item.y + 8;
+      if (item.kind === 'house') {
+        const bounds = houseBounds(item, 10);
+        left = bounds.left;
+        top = bounds.top;
+        width = bounds.right - left + 12;
+      }
+      if (item.kind === 'fence') {
+        left = Math.min(item.a[0], item.b[0]) - 3;
+        top = Math.min(item.a[1], item.b[1]) - item.height - 3;
+        width = Math.abs(item.a[0] - item.b[0]) + 8;
+      }
+      left = Math.floor(left);
+      top = Math.floor(top);
+      const canvas = makeCanvas(Math.ceil(width), Math.ceil(bottom - top));
+      const g = canvas.getContext('2d');
+      g.translate(-left, -top);
+      drawProp(g, item, palette);
+      return { canvas, left, top, y: item.y };
+    });
+    return { terrain, sprites };
+  }
+
+  function paintMoonlight(world) {
+    const masks = [makeCanvas(), makeCanvas()];
+    const outputs = masks.map(mask => mask.getContext('2d'));
+    const silhouette = makeCanvas();
+    const shape = silhouette.getContext('2d');
+    const highlight = makeCanvas();
+    const g = highlight.getContext('2d');
+    for (const item of world.items) {
+      const house = item.kind === 'house' ? dimensions(item) : null;
+      const tree = item.kind === 'pine' || item.kind === 'leaf';
+      const { x, y } = item;
+      shape.clearRect(0, 0, W, H);
+      drawProp(shape, item, seasonalColors.night, false);
+      for (const [i, out] of outputs.entries()) {
+        out.globalCompositeOperation = 'destination-out';
+        out.drawImage(silhouette, 0, 0);
+        out.globalCompositeOperation = 'source-over';
+        if (!house && !tree) continue;
+        const side = i === 0 ? -1 : 1;
+        const half = house ? (house.front + house.depth) * 0.5 + 4 : item.width * 0.76;
+        const top = y - (house ? house.wall + house.roof + house.rise + 8 : item.height);
+        g.clearRect(0, 0, W, H);
+        const light = g.createLinearGradient(x + side * half, top, x - side * half, y + (tree ? 12 : 0));
+        light.addColorStop(0, 'rgba(179, 212, 250, .63)');
+        light.addColorStop(0.34, 'rgba(151, 189, 235, .40)');
+        light.addColorStop(0.68, 'rgba(124, 162, 216, .11)');
+        light.addColorStop(1, 'rgba(117, 150, 203, 0)');
+        g.fillStyle = light;
+        g.fillRect(x - half - 3, top - 1, half * 2 + 6, y - top + 2);
+        if (house) {
+          const { left, right, depth, wall, roof, peak, rise } = house;
+          const face = item.face;
+          const color = 'rgba(187, 217, 251, .38)';
+          g.save();
+          g.translate(x, y);
+          g.scale(face, 1);
+          if (item.view === 'side') {
+            trace(g, color, left + 2, -wall - roof, right - 2, -wall - roof);
+            const edge = side === face ? right : left;
+            trace(g, color, edge, -wall + 2, edge, -3);
+          } else if (face === side) {
+            polygon(g, 'rgba(144, 180, 231, .16)', [[peak, -wall - roof], [peak + depth, -wall - roof - rise],
+              [right + depth, -wall - rise], [right, -wall]]);
+            trace(g, color, peak, -wall - roof - 1, peak + depth, -wall - roof - rise - 1);
+            trace(g, color, right + depth - 1, -wall - rise + 1, right + depth - 1, -rise - 3);
+          } else {
+            trace(g, color, left - 2, -wall, peak, -wall - roof - 1);
+            trace(g, color, left, -wall + 2, left, -3);
+          }
+          g.restore();
+        }
+        g.globalCompositeOperation = 'destination-in';
+        g.drawImage(silhouette, 0, 0);
+        g.globalCompositeOperation = 'source-over';
+        out.drawImage(highlight, 0, 0);
+      }
+    }
+    return masks;
+  }
+
+  const weatherPresets = {
+    clear: { level: 0, rain: 0, fog: 0 },
+    cloudy: { level: 4, rain: 0, fog: 0.08 },
+    fog: { level: 1.4, rain: 0, fog: 1 },
+    rain: { level: 5, rain: 0.92, fog: 0.19 }
+  };
+
+  function weatherAt(world, hour, mode, cover = 'auto') {
+    const result = { ...(mode === 'auto' ? weatherPresets.clear : weatherPresets[mode]) };
+    if (mode === 'auto') {
+      const rainFront = world.atmosphere.schedule[1];
+      const night = world.atmosphere.nightFront;
+      const positions = [[0, 1.4], [0.7, 2], [night.at - 0.5, 3], [night.at, night.peak],
+        [night.at + 0.56, night.peak - 0.26], [5.4, 0.3], [6.6, 0.3], [7.8, 1], [9.4, 2], [rainFront.at, 2.8],
+        [rainFront.at + rainFront.duration * 0.42, 5], [rainFront.at + rainFront.duration * 0.7, 5],
+        [rainFront.at + rainFront.duration, 4], [18.6, 2.9], [21.1, 1], [22.5, 2.15], [24, 1.4]];
+      const next = positions.findIndex(point => point[0] > hour);
+      const [start, low] = positions[next - 1];
+      const [end, high] = positions[next];
+      result.level = mix(low, high, smooth((hour - start) / (end - start)));
+      for (const event of world.atmosphere.schedule) {
+        const age = wrap(hour - event.at, 24);
+        const amount = smooth(age / (event.duration * 0.22)) *
+          smooth((event.duration - age) / (event.duration * 0.25));
+        result.fog = Math.max(result.fog, event.fog * amount);
+        result.rain = Math.max(result.rain, event.rain * amount *
+          smooth((age - 0.35) / 0.65) * smooth((event.duration - age - 0.25) / 0.55));
+      }
+    }
+    if (cover !== 'auto') result.level = Number(cover);
+    return result;
+  }
+
+  const cloudAreas = [0, 0.09, 0.23, 0.51, 0.83, 1];
+
+  function cloudState(world, motion, level) {
+    const low = Math.floor(clamp(level, 0, 5));
+    const high = Math.min(5, low + 1);
+    const blend = clamp(level - low);
+    const visible = [];
+    for (const [index, weight] of [[low, 1 - blend], [high, blend]]) {
+      if (index === 0 || weight < 0.001) continue;
+      const layer = world.cloudLayers[index];
+      const offset = Math.floor(wrap(motion * layer.speed, CLOUD_TILE));
+      visible.push({ layer, offset, weight });
+    }
+    return { visible, coverage: mix(cloudAreas[low], cloudAreas[high], blend) };
+  }
+
+  function cloudLight(clouds, x, y) {
+    let obscured = 0;
+    for (const { layer, offset, weight } of clouds.visible) {
+      const row = clamp(Math.round(y), 0, SKY_HEIGHT - 1) * CLOUD_TILE;
+      obscured += layer.opacity[row + wrap(Math.round(x) + offset, CLOUD_TILE)] * weight / 255;
+    }
+    return 1 - clamp(obscured);
+  }
+
+  const aperturePoints = [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1],
+    [-0.7, -0.7], [0.7, 0.7], [-0.7, 0.7], [0.7, -0.7]];
+
+  function lightThroughClouds(clouds, x, y, radius) {
+    return aperturePoints.reduce((sum, [dx, dy]) =>
+      sum + cloudLight(clouds, x + dx * radius, y + dy * radius), 0) / aperturePoints.length;
+  }
+
+  function lightAboveRidge(world, x, y) {
+    const ridge = Math.min(...world.hills.map(layer => curve(layer, x)));
+    return smooth((ridge - y + 10) / 21);
+  }
+
+  const sunlightStops = [
+    [0, '#f07480'], [0.21, '#ff9a8a'], [0.45, '#ffbd8d'], [0.67, '#ffe0ad'], [1, '#fff8e5']
+  ].map(([height, hex]) => [height, rgb(hex)]);
+
+  function sunColor(elevation) {
+    const right = sunlightStops.findIndex(([height]) => height >= elevation);
+    if (right <= 0) return sunlightStops[0][1];
+    const [leftHeight, left] = sunlightStops[right - 1];
+    const [rightHeight, color] = sunlightStops[right];
+    return blendRgb(left, color, (elevation - leftHeight) / (rightHeight - leftHeight));
+  }
+
+  function sunlightAt(world, hour, weather, clouds) {
+    const progress = (hour - 5.2) / 14.6;
+    const active = progress >= 0 && progress <= 1;
+    const arc = clamp(progress);
+    const elevation = active ? Math.sin(arc * Math.PI) : 0;
+    const x = Math.round(mix(397 + Math.sin(world.sway) * 14, 70, arc));
+    const y = Math.round(113 - elevation * 91);
+    const gap = active ? lightThroughClouds(clouds, x, y, 6) : 0;
+    const aboveRidge = active ? lightAboveRidge(world, x, y) : 0;
+    const air = 1 - weather.fog * 0.47 - weather.rain * 0.11;
+    const direct = active ? gap ** 1.35 * air * aboveRidge * (0.44 + elevation * 0.56) : 0;
+    const glow = active ? air * mix(0.10, 1, gap) * (1 - clouds.coverage * 0.36) : 0;
+    return { progress, active, elevation, x, y, gap, direct, glow, color: sunColor(elevation) };
+  }
+
+  function moonlightAt(world, hour, weather, clouds) {
+    const darkness = Math.max(1 - smooth((hour - 4.2) / 2.6), smooth((hour - 19) / 2.3));
+    const orbit = wrap(hour - 19.45, 24) / 10.6;
+    const visible = orbit <= 1 && darkness > 0;
+    const arc = clamp(orbit);
+    const elevation = Math.sin(arc * Math.PI);
+    const x = Math.round(mix(391, 102, arc));
+    const y = Math.round(111 - elevation * 83);
+    const brightness = visible ? darkness * (1 - weather.fog * 0.55 - weather.rain * 0.20) : 0;
+    const gap = visible ? lightThroughClouds(clouds, x, y, 4) : 0;
+    const direct = brightness * gap ** 1.4 * (visible ? lightAboveRidge(world, x, y) : 0);
+    return { x, y, darkness, brightness, direct, right: smooth((x - W * 0.22) / (W * 0.56)) };
+  }
+
+  const translucent = (values, alpha) => 'rgba(' + values.join(',') + ',' + clamp(alpha) + ')';
+
+  function drawClouds(clouds, sun, darkness, rain) {
+    if (clouds.visible.length === 0) return;
+    cloudContext.clearRect(0, 0, W, SKY_HEIGHT);
+    cloudContext.globalCompositeOperation = 'lighter';
+    for (const { layer, offset, weight } of clouds.visible) {
+      cloudContext.globalAlpha = weight;
+      cloudContext.drawImage(layer.canvas, -offset, 0);
+      if (offset + W > CLOUD_TILE) cloudContext.drawImage(layer.canvas, CLOUD_TILE - offset, 0);
+    }
+    const top = blendRgb([224, 234, 237], [39, 49, 74], darkness);
+    const bottom = blendRgb([182, 191, 198], [45, 56, 77], darkness);
+    const gray = clouds.coverage ** 1.5 * 0.63 + rain * 0.14;
+    const warm = sun.active ? (1 - smooth((sun.elevation - 0.22) / 0.49)) * (1 - gray) : 0;
+    const tint = cloudContext.createLinearGradient(0, 0, 0, SKY_HEIGHT);
+    tint.addColorStop(0, cssColor(blendRgb(top, [101, 122, 140], gray * (1 - darkness))));
+    tint.addColorStop(0.59, cssColor(blendRgb(blendRgb(top, bottom, 0.55), sun.color, warm * 0.34)));
+    tint.addColorStop(1, cssColor(blendRgb(blendRgb(bottom, [109, 127, 145], gray * (1 - darkness)), sun.color, warm * 0.51)));
+    cloudContext.globalCompositeOperation = 'source-atop';
+    cloudContext.globalAlpha = 0.57 + darkness * 0.34;
+    cloudContext.fillStyle = tint;
+    cloudContext.fillRect(0, 0, W, SKY_HEIGHT);
+    cloudContext.globalAlpha = 1;
+    cloudContext.globalCompositeOperation = 'source-over';
+    ctx.drawImage(cloudCanvas, 0, 0);
+  }
+
+  function drawCrescent(x, y) {
+    for (let dy = -6; dy <= 6; dy++) {
+      const radius = Math.floor(Math.sqrt(36 - dy * dy));
+      for (let dx = -radius; dx <= radius; dx++) {
+        if ((dx - 3) ** 2 + (dy + 2) ** 2 <= 25) continue;
+        pixels(ctx, dy > 1 && dx > -3 ? '#c8c9bf' : '#efead1', x + dx, y + dy);
+      }
+    }
+  }
+
+  function drawSky(world, light, motion, weather, clouds, sun, moon) {
+    const a = seasonalColors[light.from];
+    const b = seasonalColors[light.to];
+    const cloudyTint = [75, 93, 115];
+    const sky = a.sky.map((color, i) => {
+      const lit = blendRgb(rgb(color), rgb(b.sky[i]), light.blend);
+      return blendRgb(lit, cloudyTint, clouds.coverage * (0.12 + i * 0.095));
+    });
+    const gradient = ctx.createLinearGradient(0, 0, 0, 152);
+    for (const [i, position] of [0, 0.42, 0.73, 1].entries()) {
+      gradient.addColorStop(position, cssColor(sky[i]));
+    }
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, W, H);
+
+    const { darkness } = moon;
+    if (darkness > 0) {
+      for (const star of world.atmosphere.stars) {
+        const shimmer = 0.74 + Math.sin(motion * 1.2 + star.flicker) * 0.26;
+        ctx.globalAlpha = darkness * mix(0.13, 0.75, star.tone) * shimmer;
+        pixels(ctx, star.tone > 0.72 ? '#f8e8bb' : '#c4d6ed', star.x, star.y);
+        if (star.tone > 0.98) {
+          ctx.globalAlpha *= 0.48;
+          pixels(ctx, '#e5dfd4', star.x - 1, star.y, 3);
+          pixels(ctx, '#e5dfd4', star.x, star.y - 1, 1, 3);
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    if (sun.active) {
+      const { x, y, elevation, color } = sun;
+      const lowSun = 1 - smooth((elevation - 0.15) / 0.68);
+      const rim = ctx.createLinearGradient(0, 0, 0, SKY_HEIGHT);
+      rim.addColorStop(0.24, translucent(color, 0));
+      rim.addColorStop(0.68, translucent(blendRgb(color, [241, 123, 153], 0.4), lowSun * sun.glow * 0.19));
+      rim.addColorStop(1, translucent(blendRgb(color, [255, 170, 104], 0.28), lowSun * sun.glow * 0.6));
+      ctx.fillStyle = rim;
+      ctx.fillRect(0, 0, W, SKY_HEIGHT);
+      const halo = ctx.createRadialGradient(x, y, 3, x, y, mix(55, 144, lowSun));
+      halo.addColorStop(0, translucent(blendRgb(color, [255, 233, 211], 0.35), sun.glow * 0.52));
+      halo.addColorStop(0.35, translucent(color, sun.glow * 0.27));
+      halo.addColorStop(1, translucent(color, 0));
+      ctx.fillStyle = halo;
+      ctx.fillRect(0, 0, W, SKY_HEIGHT);
+      const disk = blendRgb(color, [255, 250, 227], mix(0.32, 0.87, elevation));
+      ctx.globalAlpha = 1 - weather.fog * 0.48;
+      ellipse(ctx, cssColor(disk), x, y, 9, 9);
+      pixels(ctx, cssColor(blendRgb(disk, color, 0.69)), x - 7, y + 4, 14);
+      pixels(ctx, cssColor(blendRgb(disk, [255, 255, 249], 0.78)), x - 5, y - 3, 10, 2);
+      ctx.globalAlpha = 1;
+    }
+
+    if (moon.brightness > 0) {
+      const { x, y } = moon;
+      const corona = ctx.createRadialGradient(x, y, 3, x, y, 42);
+      corona.addColorStop(0, translucent([164, 191, 244], moon.brightness * 0.24));
+      corona.addColorStop(0.36, translucent([141, 172, 230], moon.brightness * 0.12));
+      corona.addColorStop(1, translucent([121, 151, 217], 0));
+      ctx.fillStyle = corona;
+      ctx.fillRect(0, 0, W, SKY_HEIGHT);
+      ctx.globalAlpha = moon.brightness;
+      drawCrescent(x, y);
+      ctx.globalAlpha = 1;
+    }
+
+    drawClouds(clouds, sun, darkness, weather.rain);
+  }
+
+  function drawLandLayer(layers, light, part) {
+    landContext.drawImage(layers[light.from][part], 0, 0);
+    if (light.from !== light.to && light.blend > 0) {
+      landContext.globalAlpha = light.blend;
+      landContext.drawImage(layers[light.to][part], 0, 0);
+      landContext.globalAlpha = 1;
+    }
+  }
+
+  function castHouseShadow(item, dx, dy, ink) {
+    const { left, right, peak, wall, roof, depth, rise } = dimensions(item);
+    const project = (x, y, height) => [item.x + x * item.face + dx * height, item.y + y + dy * height];
+    if (item.view === 'side') {
+      polygon(shadowContext, ink, [project(left, 0, 0), project(right, 0, 0),
+        project(right, 0, wall + roof), project(left, 0, wall + roof)]);
+      return;
+    }
+    const ridge = project(peak, 0, wall + roof);
+    const farRidge = project(peak + depth, -rise, wall + roof);
+    const frontLeft = project(left, 0, wall);
+    const frontRight = project(right, 0, wall);
+    const backRight = project(right + depth, -rise, wall);
+    polygon(shadowContext, ink, [project(left, 0, 0), project(right, 0, 0), frontRight, ridge, frontLeft]);
+    polygon(shadowContext, ink, [project(right, 0, 0), project(right + depth, -rise, 0), backRight, frontRight]);
+    polygon(shadowContext, ink, [frontRight, backRight, farRidge, ridge]);
+    polygon(shadowContext, ink, [frontLeft, ridge, farRidge, project(left + depth, -rise, wall)]);
+  }
+
+  function castTreeShadow(item, dx, dy, ink) {
+    const { x, y, height, width, kind } = item;
+    if (kind === 'leaf' && season === 'winter') {
+      const project = (reach, spread) => [x + dx * height * reach + spread, y + dy * height * reach];
+      trace(shadowContext, ink, x, y, ...project(0.91, 0), 2);
+      for (let branch = 0; branch < 7; branch++) {
+        const reach = 0.25 + branch * 0.085;
+        trace(shadowContext, ink, ...project(reach, 0), ...project(reach + 0.18, (branch % 2 ? 1 : -1) * width * 0.42));
+      }
+      return;
+    }
+    const axis = Math.hypot(dx, dy);
+    const acrossX = dy / axis * 0.92;
+    const acrossY = -dx / axis * 0.51;
+    const outline = kind === 'pine'
+      ? [[0, -0.07], [0.21, -0.07], [0.16, -0.53], [0.43, -0.28], [0.35, -0.41],
+        [0.64, -0.18], [0.56, -0.26], [1, 0], [0.57, 0.24], [0.64, 0.16], [0.34, 0.43],
+        [0.43, 0.28], [0.16, 0.53], [0.21, 0.07], [0, 0.07]]
+      : [[0, -0.08], [0.37, -0.09], [0.43, -0.45], [0.55, -0.66], [0.72, -0.67],
+        [0.89, -0.47], [0.97, -0.18], [0.97, 0.25], [0.86, 0.53], [0.69, 0.67],
+        [0.53, 0.58], [0.41, 0.32], [0.37, 0.09], [0, 0.08]];
+    polygon(shadowContext, ink, outline.map(([reach, span]) => [
+      x + dx * height * reach + acrossX * width * span,
+      y + dy * height * reach + acrossY * width * span
+    ]));
+  }
+
+  let shadowPosition = -1;
+
+  function drawCastShadows(world, sun) {
+    if (sun.direct < 0.025) return;
+    const position = Math.round(sun.progress * 520);
+    if (position !== shadowPosition) {
+      shadowPosition = position;
+      const angle = position / 520 * Math.PI;
+      const elevation = Math.sin(angle);
+      const reach = mix(2.8, 0.27, elevation ** 0.67);
+      const dx = -Math.cos(angle) * reach;
+      const dy = (0.47 + elevation * 0.23) * reach;
+      const ink = cssColor(blendRgb([56, 43, 69], [38, 54, 65], elevation));
+      shadowContext.clearRect(0, 0, W, H);
+      for (const item of world.items) {
+        if (item.kind === 'house') castHouseShadow(item, dx, dy, ink);
+        if (item.kind === 'pine' || item.kind === 'leaf') castTreeShadow(item, dx, dy, ink);
+      }
+    }
+    const shadow = sun.direct * (0.54 + (1 - sun.elevation) * 0.19);
+    const soft = mix(0.72, 1.85, 1 - sun.gap);
+    landContext.save();
+    landContext.filter = 'blur(' + soft + 'px)';
+    landContext.globalAlpha = shadow * 0.4;
+    landContext.drawImage(shadowCanvas, 0, 0);
+    landContext.restore();
+    landContext.globalAlpha = shadow * mix(0.41, 0.83, sun.gap);
+    landContext.drawImage(shadowCanvas, 0, 0);
+    landContext.globalAlpha = 1;
+  }
+
+  function gradeLandscape(sun, moon, clouds, weather, hour) {
+    const day = smooth((hour - 4) / 2.5) * smooth((21.8 - hour) / 2.7);
+    const obscured = sun.active ? 1 - sun.gap : clouds.coverage;
+    const dim = (clouds.coverage * 0.25 + obscured * 0.19 + weather.rain * 0.07) * day
+      + clouds.coverage * (1 - day) * 0.13;
+    landContext.globalCompositeOperation = 'source-atop';
+    if (dim > 0.005) {
+      const ambient = landContext.createLinearGradient(0, 68, 0, H);
+      ambient.addColorStop(0, translucent([108, 124, 144], dim * 0.54));
+      ambient.addColorStop(0.44, translucent([62, 79, 97], dim));
+      ambient.addColorStop(1, translucent([40, 53, 74], dim * 1.08));
+      landContext.fillStyle = ambient;
+      landContext.fillRect(0, 0, W, H);
+    }
+    if (moon.darkness > 0.005) {
+      const shade = moon.darkness * (1 - moon.direct) * (0.16 + clouds.coverage * 0.13);
+      landContext.fillStyle = translucent([9, 16, 31], shade);
+      landContext.fillRect(0, 0, W, H);
+    }
+    if (sun.direct > 0.005) {
+      const warmth = 1 - smooth((sun.elevation - 0.24) / 0.71);
+      const tint = blendRgb([255, 251, 228], blendRgb(sun.color, [255, 155, 111], 0.38), warmth);
+      const strength = sun.direct * mix(0.18, 0.59, warmth);
+      const center = mix(W * 0.5, sun.x, 0.72);
+      const light = landContext.createRadialGradient(center, sun.y + 80, 18, center, sun.y + 80, mix(405, 298, clouds.coverage));
+      light.addColorStop(0, translucent(tint, strength));
+      light.addColorStop(0.67, translucent(blendRgb(tint, [255, 210, 169], warmth * 0.24), strength * 0.59));
+      light.addColorStop(1, translucent(tint, strength * 0.13));
+      landContext.fillStyle = light;
+      landContext.fillRect(0, 0, W, H);
+    }
+    landContext.globalCompositeOperation = 'source-over';
+  }
+
+  function drawLand(world, layers, light, hour, motion, weather, clouds, sun, moon) {
+    landContext.clearRect(0, 0, W, H);
+    drawLandLayer(layers, light, 'terrain');
+    const actors = groundPopulation(world, motion, hour);
+    updateFootprints(world, actors, motion);
+    drawFootprints(landContext, world, motion);
+    drawCastShadows(world, sun);
+    let nextActor = 0;
+    for (let i = 0; i < world.items.length; i++) {
+      const sprite = layers[light.from].sprites[i];
+      while (nextActor < actors.length && actors[nextActor].y <= sprite.y) {
+        drawGroundActor(landContext, actors[nextActor++], motion);
+      }
+      landContext.drawImage(sprite.canvas, sprite.left, sprite.top);
+      if (light.from !== light.to && light.blend > 0) {
+        const other = layers[light.to].sprites[i];
+        landContext.globalAlpha = light.blend;
+        landContext.drawImage(other.canvas, other.left, other.top);
+        landContext.globalAlpha = 1;
+      }
+    }
+    while (nextActor < actors.length) drawGroundActor(landContext, actors[nextActor++], motion);
+    gradeLandscape(sun, moon, clouds, weather, hour);
+    if (moon.direct > 0.005) {
+      const tint = moon.direct * 0.84;
+      landContext.globalAlpha = tint * (1 - moon.right);
+      landContext.drawImage(world.moonMasks[0], 0, 0);
+      landContext.globalAlpha = tint * moon.right;
+      landContext.drawImage(world.moonMasks[1], 0, 0);
+      landContext.globalAlpha = 1;
+    }
+    const camp = campState(world.population.camp, hour);
+    if (camp && camp.heat > 0) {
+      const hearth = world.population.camp;
+      const flicker = 0.91 + Math.sin(motion * 13) * 0.05 + Math.sin(motion * 21) * 0.04;
+      const glow = landContext.createRadialGradient(hearth.x, hearth.y - 3, 2, hearth.x, hearth.y - 3, 32);
+      glow.addColorStop(0, 'rgba(255, 191, 91,' + camp.heat * flicker * 0.58 + ')');
+      glow.addColorStop(0.35, 'rgba(245, 135, 55,' + camp.heat * flicker * 0.32 + ')');
+      glow.addColorStop(1, 'rgba(233, 108, 44,0)');
+      landContext.globalCompositeOperation = 'source-atop';
+      landContext.fillStyle = glow;
+      landContext.fillRect(hearth.x - 33, hearth.y - 36, 66, 66);
+      landContext.globalCompositeOperation = 'source-over';
+    }
+    ctx.drawImage(landCanvas, 0, 0);
+    drawChimneySmoke(world, motion, hour);
+
+    if (weather.fog > 0.02) {
+      const tint = skyColor(seasonalColors[light.from].mist, seasonalColors[light.to].mist, light.blend);
+      for (const [i, band] of world.atmosphere.fog.entries()) {
+        const x = Math.round(wrap(band.x + motion * band.speed, W + 330) - 120);
+        const y = band.y + Math.round(Math.sin(motion * 0.09 + i * 0.83) * 3);
+        for (let layer = 0; layer < 4; layer++) {
+          ctx.globalAlpha = weather.fog * (0.035 + layer * 0.009);
+          ellipse(ctx, tint, x, y, band.width * (1.17 - layer * 0.17), band.depth * (1.04 - layer * 0.19));
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    for (const house of world.houses) {
+      if (house.style === 'shed') continue;
+      const strength = Math.max(smooth((hour - house.litAt) / 0.75), 1 - smooth((hour - house.goesDark) / 0.6));
+      if (strength <= 0) continue;
+      const d = dimensions(house);
+      const groundX = house.x + house.face * (d.left + 6);
+      for (let ring = 3; ring >= 1; ring--) {
+        ctx.globalAlpha = strength * (0.045 + (3 - ring) * 0.028);
+        ellipse(ctx, '#edaa61', groundX - 1, house.y + 4, 5 + ring * 4, 1.5 + ring);
+      }
+      ctx.save();
+      ctx.translate(house.x, house.y);
+      ctx.scale(house.face, 1);
+      for (const { x, y, w, h } of houseWindows(house, d)) {
+        ctx.globalAlpha = strength * 0.17;
+        ellipse(ctx, '#efa849', x + w / 2, y + h / 2, w + 3, h + 3);
+        ctx.globalAlpha = strength;
+        pixels(ctx, '#dd8a44', x, y, w, h);
+        pixels(ctx, '#f7bd64', x + 1, y + 1, Math.max(1, w - 2), Math.max(1, h - 2));
+        pixels(ctx, '#ffe3a1', x + 1, y + 1, 1, Math.max(1, h - 2));
+        if (w > 3) pixels(ctx, '#965c42', x + Math.floor(w / 2), y, 1, h);
+      }
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
+
+    if (weather.rain > 0.02) {
+      if (season === 'winter') {
+        drawSnowfall(world, motion, weather.rain, moon.darkness);
+        return;
+      }
+      for (const drop of world.atmosphere.drops) {
+        const travel = motion * drop.speed;
+        const x = Math.round(wrap(drop.x - travel * 0.36, W + 80) - 35);
+        const y = Math.round(wrap(drop.y + travel, H + 50) - 22);
+        ctx.globalAlpha = weather.rain * mix(0.11, 0.37, drop.tone);
+        trace(ctx, '#cbd8cf', x, y, x - Math.ceil(drop.length * 0.36), y + drop.length);
+        if (y > 182 && drop.tone > 0.82 && wrap(travel + drop.y, 67) < 7) {
+          pixels(ctx, '#c2c8a3', x - 2, y + 2, 3);
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function createSeasonEffects(world) {
+    const random = randomFrom(hash(world.code + '/сезоны'));
+    return {
+      snow: Array.from({ length: 185 }, () => ({
+        x: between(random, 0, W + 100), y: between(random, 0, H + 40), speed: between(random, 8, 29),
+        phase: between(random, 0, Math.PI * 2), size: random(), drift: between(random, 2, 11)
+      })),
+      leaves: world.items.filter(item => item.kind === 'leaf').flatMap(tree =>
+        Array.from({ length: Math.max(4, Math.round(tree.height / 5)) }, () => ({
+          tree, phase: between(random, 0, 16), period: between(random, 11, 18),
+          x: between(random, -0.4, 0.4) * tree.width, lift: between(random, 0.38, 0.85) * tree.height,
+          sway: between(random, 2, 7), shade: integer(random, 1, 4)
+        }))),
+      footprints: [], previous: new Map(), lastMotion: motion
+    };
+  }
+
+  function fallingLeaves(world, motion) {
+    const light = lightingAt(simulatedMinutes / 60);
+    return world.seasonEffects.leaves.map(leaf => {
+      const age = wrap(motion + leaf.phase, leaf.period);
+      const fall = clamp(age / (leaf.period * 0.7));
+      const airborne = 1 - smooth((fall - 0.85) / 0.15);
+      const shadesA = treeLeafColors(leaf.tree, seasonalColors[light.from]);
+      const shadesB = treeLeafColors(leaf.tree, seasonalColors[light.to]);
+      return { kind: 'leafParticle', x: leaf.tree.x + leaf.x + fall * 10 +
+          Math.sin(age * 1.2 + leaf.phase) * leaf.sway * airborne,
+        y: leaf.tree.y + 1, leafY: mix(leaf.tree.y - leaf.lift, leaf.tree.y + 2, fall),
+        color: skyColor(shadesA[leaf.shade], shadesB[leaf.shade], light.blend),
+        wide: Math.sin(age * 3 + leaf.phase) > 0, alpha: smooth((leaf.period - age) / 0.6) };
+    });
+  }
+
+  function drawSnowfall(world, motion, intensity, darkness) {
+    const wind = Math.sin(motion * 0.16) * 13 + Math.sin(motion * 0.057) * 9;
+    for (const [i, flake] of world.seasonEffects.snow.entries()) {
+      if (i / world.seasonEffects.snow.length > intensity) continue;
+      const age = motion * flake.speed;
+      const x = wrap(flake.x + motion * flake.drift + Math.sin(motion * 0.8 + flake.phase) * (5 + flake.size * 12)
+        + wind * Math.sin(motion * 0.24 + flake.phase), W + 48) - 24;
+      const y = wrap(flake.y + age + Math.sin(motion * 1.3 + flake.phase) * 4, H + 24) - 12;
+      ctx.globalAlpha = mix(0.3, 0.87, flake.size) * (1 - darkness * 0.28);
+      pixels(ctx, flake.size > 0.72 ? '#edf3f6' : '#bcd0e2', x, y, flake.size > 0.82 ? 2 : 1);
+      if (flake.size > 0.96) {
+        pixels(ctx, '#edf3f6', x + 1, y - 1, 1, 3);
+        pixels(ctx, '#edf3f6', x, y, 3);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function updateFootprints(world, actors, motion) {
+    if (season !== 'winter') return;
+    const effects = world.seasonEffects;
+    const elapsed = motion - effects.lastMotion;
+    effects.lastMotion = motion;
+    if (elapsed <= 0 || elapsed > 0.3) return;
+    for (const actor of actors) {
+      if (!actor.moving || actor.alpha < 0.3 || actor.kind === 'fire') continue;
+      const id = [actor.kind, actor.home?.seed || '', actor.offset || 0].join('/');
+      const previous = effects.previous.get(id);
+      const distance = previous ? Math.hypot(actor.x - previous.x, actor.y - previous.y) : Infinity;
+      if (distance < 2.3) continue;
+      if (distance < 9) {
+        effects.footprints.push({ x: actor.x, y: actor.y, born: motion,
+          person: actor.kind === 'person', step: previous.step ^ 1, direction: actor.direction });
+      }
+      effects.previous.set(id, { x: actor.x, y: actor.y, step: previous ? previous.step ^ 1 : 0 });
+    }
+    const lifetime = 115 / (1 + weather.rain * 2.2);
+    effects.footprints = effects.footprints.filter(mark => motion - mark.born < lifetime).slice(-2200);
+  }
+
+  function drawFootprints(g, world, motion) {
+    if (season !== 'winter') return;
+    const lifetime = 115 / (1 + weather.rain * 2.2);
+    for (const mark of world.seasonEffects.footprints) {
+      const fade = 1 - (motion - mark.born) / lifetime;
+      g.globalAlpha = clamp(fade) * 0.47;
+      const side = mark.step ? 1 : -1;
+      pixels(g, '#617f9a', mark.x, mark.y + side, mark.person ? 1 : 2, mark.person ? 2 : 1);
+      if (!mark.person) pixels(g, '#839fb5', mark.x - mark.direction * 2, mark.y - side);
+    }
+    g.globalAlpha = 1;
+  }
+
+  function drawChimneySmoke(world, motion, hour) {
+    if (season !== 'winter' && !(season === 'autumn' && (hour < 9 || hour > 18))) return;
+    for (const house of world.houses) {
+      if (!houseStyles[house.style].chimney) continue;
+      const d = dimensions(house);
+      const localX = house.view === 'side' ? d.right - 8 : d.peak + Math.round(d.depth * 0.68) + 2;
+      const x = house.x + localX * house.face;
+      const y = house.y - d.wall - d.roof - d.rise - 7;
+      for (let puff = 0; puff < 4; puff++) {
+        const age = wrap(motion * 0.13 + puff * 0.25 + house.seed % 13, 1);
+        ctx.globalAlpha = (1 - age) * 0.15;
+        ellipse(ctx, '#aab5c3', x + age * 13 + Math.sin(age * 6) * 2, y - age * 17,
+          1 + age * 4, 1 + age * 2);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function measureWalk(points) {
+    const lengths = [0];
+    for (let i = 1; i < points.length; i++) {
+      lengths.push(lengths[i - 1] + Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y));
+    }
+    return { points, lengths, distance: lengths[lengths.length - 1] };
+  }
+
+  function walkPosition(walk, progress) {
+    const distance = clamp(progress) * walk.distance;
+    let i = walk.lengths.findIndex(length => length > distance);
+    if (i < 1) i = walk.points.length - 1;
+    const a = walk.points[i - 1] || walk.points[0];
+    const b = walk.points[i] || a;
+    const segment = walk.lengths[i] - (walk.lengths[i - 1] || 0);
+    const t = segment > 0 ? clamp((distance - walk.lengths[i - 1]) / segment) : 0;
+    return { x: mix(a.x, b.x, t), y: mix(a.y, b.y, t), direction: b.x >= a.x ? 1 : -1 };
+  }
+
+  function villageWalk(world, from, to) {
+    const key = p => p.x + ',' + p.y;
+    const graph = new Map();
+    for (const route of world.paths.routes) {
+      const a = key(route[0]);
+      const b = key(route[route.length - 1]);
+      const distance = measureWalk(route).distance;
+      if (!graph.has(a)) graph.set(a, []);
+      if (!graph.has(b)) graph.set(b, []);
+      graph.get(a).push({ end: b, route, distance });
+      graph.get(b).push({ end: a, route: route.slice().reverse(), distance });
+    }
+    const start = key(from.kind === 'house' ? houseDoor(from) : from);
+    const end = key(to.kind === 'house' ? houseDoor(to) : to);
+    const costs = new Map([[start, 0]]);
+    const parents = new Map();
+    const open = new Set([start]);
+    while (open.size) {
+      let current;
+      let cost = Infinity;
+      for (const node of open) if (costs.get(node) < cost) { current = node; cost = costs.get(node); }
+      if (current === end) break;
+      open.delete(current);
+      for (const edge of graph.get(current) || []) {
+        const candidate = cost + edge.distance;
+        if (candidate >= (costs.get(edge.end) ?? Infinity)) continue;
+        costs.set(edge.end, candidate);
+        parents.set(edge.end, { from: current, route: edge.route });
+        open.add(edge.end);
+      }
+    }
+    const pieces = [];
+    let node = end;
+    while (node !== start && parents.has(node)) {
+      const step = parents.get(node);
+      pieces.unshift(step.route);
+      node = step.from;
+    }
+    if (node !== start) return null;
+    return measureWalk(pieces.flatMap((route, i) => i ? route.slice(1) : route));
+  }
+
+  function clearGround(world, x, y, padding = 2) {
+    return x > 3 && x < W - 3 && y > world.fringe(x) + 2 && y < H - 3 &&
+      !world.houses.some(h => {
+        const d = dimensions(h);
+        return Math.abs(x - h.x) < (d.front + d.depth) * 0.5 + padding && y > h.y - d.rise - 5 - padding && y < h.y + 4 + padding;
+      }) && !world.gardens.some(g => x > g.left - padding && x < g.right + padding && y > g.top - padding && y < g.bottom + padding) &&
+      !world.items.some(item => item.kind === 'rock' && item.size > 6 &&
+        Math.hypot(x - item.x, (y - item.y) * 1.7) < item.size * 0.65 + padding);
+  }
+
+  function clearSegment(world, a, b, padding = 2) {
+    const steps = Math.ceil(Math.hypot(a.x - b.x, a.y - b.y) / 2);
+    for (let i = 0; i <= steps; i++) {
+      if (!clearGround(world, mix(a.x, b.x, i / Math.max(1, steps)), mix(a.y, b.y, i / Math.max(1, steps)), padding)) return false;
+    }
+    return true;
+  }
+
+  function createGroundPopulation(world) {
+    const random = randomFrom(hash(world.code + '/жители'));
+    const homes = world.houses.filter(h => h.style !== 'shed');
+    const people = [];
+    const shirts = ['#a75d52', '#638b9c', '#cfad68', '#7b8c60', '#a58ab3', '#c3bda0'];
+    function person(home, walk, activity, offset) {
+      if (!walk || walk.distance < 1) return;
+      people.push({ home, walk, activity, offset, speed: between(random, 4.5, 6.8),
+        shirt: pick(random, shirts), hair: pick(random, ['#554331', '#bba274', '#4b4142', '#9b8272']),
+        skin: pick(random, ['#ddb58d', '#bc8c6d', '#eac7a0']), duration: between(random, 16, 28) });
+    }
+    for (const [index, home] of homes.entries()) {
+      const garden = world.gardens.find(g => g.owner === home.seed);
+      if (garden) {
+        const door = houseDoor(home);
+        const gateX = garden.side > 0 ? garden.left : garden.right;
+        const gateY = Math.round((garden.top + garden.bottom) / 2);
+        const outside = gateX - garden.side * 4;
+        const walk = measureWalk([door, { x: door.x, y: garden.bottom + 5 },
+          { x: outside, y: garden.bottom + 5 }, { x: outside, y: gateY },
+          { x: gateX + garden.side * 4, y: gateY }]);
+        person(home, walk, 'dig', between(random, 0, 60));
+      } else {
+        const other = homes[(index + 1 + integer(random, 0, homes.length - 2)) % homes.length];
+        person(home, villageWalk(world, home, other), 'visit', between(random, 0, 100));
+      }
+    }
+    if (homes.length >= 2) {
+      const route = villageWalk(world, homes[0], homes[1]);
+      if (route && route.points.length > 8) {
+        const split = Math.floor(route.points.length * 0.5);
+        const middle = route.points[split];
+        const first = measureWalk(route.points.slice(0, split + 1));
+        const second = measureWalk(route.points.slice(split).reverse());
+        const offset = between(random, 25, 55);
+        person(homes[0], first, 'talk', offset);
+        person(homes[1], second, 'talk', offset);
+        const pair = people.slice(-2);
+        const travel = Math.max(...pair.map(p => p.walk.distance / p.speed));
+        pair.forEach((p, i) => {
+          p.travel = travel;
+          p.duration = 19;
+          p.meeting = { x: middle.x + (i ? 3 : -3), y: middle.y + (i ? 1 : 0) };
+          p.partnerSide = i ? -1 : 1;
+        });
+      }
+    }
+    const pets = [];
+    for (const home of homes) {
+      for (const kind of ['cat', 'dog']) {
+        if (random() > (kind === 'cat' ? 0.76 : 0.61)) continue;
+        const door = houseDoor(home);
+        const points = [{ x: door.x, y: door.y + 5 }];
+        for (let attempt = 0; points.length < 6 && attempt < 80; attempt++) {
+          const candidate = { x: home.x + between(random, -24, 24), y: home.y + between(random, 8, 23) };
+          if (clearSegment(world, points[points.length - 1], candidate)) points.push(candidate);
+        }
+        if (points.length < 2) continue;
+        const walk = measureWalk(points.concat(points.slice(0, -1).reverse()));
+        pets.push({ kind, home, walk, offset: between(random, 0, 40), speed: kind === 'cat' ? 4 : 5.5,
+          coat: pick(random, kind === 'cat' ? ['#bd8756', '#d2c8ad', '#6b6a6a', '#45484a'] : ['#a47a50', '#d0ba8d', '#656462']),
+          patch: pick(random, ['#e5d3ad', '#514b43', '#a5815a']) });
+      }
+    }
+    const exits = world.paths.routes.flatMap(route => [route[0], route[route.length - 1]])
+      .filter(point => point.x < 12 || point.x > W - 12 || point.y > H - 5);
+    for (const [index, dog] of pets.filter(pet => pet.kind === 'dog').entries()) {
+      dog.nightRole = index % 5 === 4 ? 'patrol' : index % 2 === 0 ? 'sleep' : 'away';
+      dog.sleepSpot = dog.walk.points[0];
+      if (dog.nightRole !== 'away') continue;
+      const exit = exits.slice().sort((a, b) => Math.hypot(a.x - dog.home.x, a.y - dog.home.y) -
+        Math.hypot(b.x - dog.home.x, b.y - dog.home.y))[0];
+      dog.nightWalk = exit ? villageWalk(world, dog.home, exit) : null;
+      if (!dog.nightWalk) dog.nightRole = 'sleep';
+    }
+    const wildlife = [];
+    const species = ['hare', 'fox', 'wolf', 'deer', 'bear'];
+    for (const [index, kind] of species.entries()) {
+      const routes = [];
+      for (let attempt = 0; routes.length < 4 && attempt < 240; attempt++) {
+        const side = pick(random, [-1, 1]);
+        const y = between(random, 169, 252);
+        const a = { x: side < 0 ? between(random, 8, 24) : between(random, W - 24, W - 8), y };
+        const b = { x: side < 0 ? between(random, 42, 95) : between(random, W - 95, W - 42), y: y + between(random, -17, 17) };
+        const away = p => world.houses.every(h => Math.hypot(p.x - h.x, (p.y - h.y) * 1.3) > 43);
+        if (!away(a) || !away(b) || !clearSegment(world, a, b, kind === 'bear' ? 6 : 3)) continue;
+        const middle = { x: mix(a.x, b.x, 0.54), y: mix(a.y, b.y, 0.54) };
+        routes.push(measureWalk([a, middle, b, middle, a]));
+      }
+      if (routes.length) wildlife.push({ kind, routes, offset: between(random, 0, 90) + index * 19,
+        interval: kind === 'hare' ? 32 : kind === 'bear' ? 112 : kind === 'deer' ? 84 : 61,
+        speed: { hare: 13, fox: 10, wolf: 12, deer: 6, bear: 3.8 }[kind] });
+    }
+    const camp = createCamp(world, homes, people);
+    return { people, pets, wildlife, camp };
+  }
+
+  function createCamp(world, homes, people) {
+    const random = randomFrom(hash(world.code + '/костёр'));
+    let selected;
+    let best = -Infinity;
+    for (const route of world.paths.routes) {
+      const start = route[0];
+      const source = world.houses.find(h => {
+        const door = houseDoor(h);
+        return door.x === start.x && door.y === start.y;
+      });
+      const end = route[route.length - 1];
+      if (!source || !(end.x < 12 || end.x > W - 12 || end.y > H - 5)) continue;
+      for (let i = 4; i < route.length - 4; i += 3) {
+        const p = route[i];
+        if (p.x < 28 || p.x > W - 28 || p.y < 178 || p.y > 258) continue;
+        for (const [dx, dy] of [[0, -10], [0, 10], [-12, 0], [12, 0]]) {
+          const center = { x: p.x + dx, y: p.y + dy };
+          if (Math.min(center.x, W - center.x) > 110 || center.x < 35 || center.x > W - 35 || center.y > 259) continue;
+          if (!clearSegment(world, p, center, 5)) continue;
+          if (![-9, 0, 9].every(dx => [-6, 0, 7].every(dy => clearGround(world, center.x + dx, center.y + dy, 4)))) continue;
+          const distance = Math.min(...world.houses.map(h => Math.hypot(center.x - h.x, (center.y - h.y) * 1.3)));
+          if (distance < 32) continue;
+          const edge = Math.min(center.x, W - center.x);
+          const trees = world.items.filter(item => (item.kind === 'pine' || item.kind === 'leaf') &&
+            Math.hypot(item.x - center.x, item.y - center.y) < 55).length;
+          const score = distance * 0.5 - edge * 0.25 + trees * 3 + random() * 5;
+          if (score > best) {
+            best = score;
+            selected = { ...center, source, approach: route.slice(0, i + 1) };
+          }
+        }
+      }
+    }
+    if (!selected) return null;
+    const { x, y, source, approach } = selected;
+    const guests = homes.slice().sort((a, b) => Math.hypot(a.x - x, a.y - y) - Math.hypot(b.x - x, b.y - y)).slice(0, 3);
+    const seats = [[-8, 2], [8, 3], [0, -7]];
+    const members = guests.map((home, i) => {
+      const start = home === source ? [houseDoor(home)] : villageWalk(world, home, source)?.points;
+      if (!start) return null;
+      const seat = { x: x + seats[i][0], y: y + seats[i][1] };
+      const walk = measureWalk([...start, ...approach.slice(1), { x, y: y + 9 }, seat]);
+      const resident = people.find(p => p.home === home);
+      return { ...resident, kind: 'person', home, walk, seat, offset: i * 2.7,
+        arrival: 1.42 + i * 0.17, departure: 4.97 + i * 0.13,
+        returnDuration: clamp(walk.distance / 100, 0.8, 1.95),
+        shirt: resident?.shirt || pick(random, ['#b17860', '#799185', '#a28bba']),
+        skin: resident?.skin || '#d6ae88', hair: resident?.hair || '#6b5141' };
+    }).filter(Boolean);
+    // Leave a small clearing so the seated group remains visible between the trees.
+    world.items = world.items.filter(item => {
+      if (item.kind !== 'pine' && item.kind !== 'leaf' && item.kind !== 'bush') return true;
+      const reach = item.width ? item.width * 0.46 : item.size;
+      const top = item.y - (item.height || item.size);
+      return !(Math.abs(item.x - x) < reach + 17 && item.y > y - 9 && top < y + 9);
+    });
+    return { x, y, members };
+  }
+
+  function campState(camp, hour) {
+    if (!camp || season === 'winter') return null;
+    const age = wrap(hour - 20.5, 24);
+    if (age > 7.3) return null;
+    const flame = smooth((age - 1.48) / 0.24) * (1 - smooth((age - 4.35) / 0.48));
+    const embers = smooth((age - 1.48) / 0.18) * (1 - smooth((age - 4.75) / 0.72));
+    return { age, flame, embers, heat: Math.max(flame, embers * 0.19) };
+  }
+
+  function campPopulation(camp, hour) {
+    const state = campState(camp, hour);
+    if (!state) return [];
+    const { age, flame, embers } = state;
+    const actors = [];
+    if (age > 1.42 && age < 6.3) actors.push({ kind: 'fire', x: camp.x, y: camp.y, flame, embers, alpha: 1 });
+    for (const member of camp.members) {
+      const leave = member.departure;
+      const start = 0.12 + member.offset / 22;
+      const end = leave + member.returnDuration;
+      if (age < start || age > end) continue;
+      const seated = age >= member.arrival && age < leave;
+      const progress = age < member.arrival ? (age - start) / (member.arrival - start)
+        : age < leave ? 1 : 1 - (age - leave) / member.returnDuration;
+      const position = walkPosition(member.walk, progress);
+      if (age >= leave) position.direction *= -1;
+      if (seated) Object.assign(position, member.seat, { direction: camp.x >= member.seat.x ? 1 : -1 });
+      actors.push({ ...member, ...position, seated, moving: !seated, working: seated,
+        alpha: smooth((age - start) / 0.07) * smooth((end - age) / 0.07) });
+    }
+    return actors;
+  }
+
+  function groundPopulation(world, motion, hour) {
+    const actors = campPopulation(world.population.camp, hour);
+    const awayAtCamp = new Set(actors.filter(actor => actor.kind === 'person').map(actor => actor.home));
+    const daylight = smooth((hour - 5) / 1.5) * smooth((21.4 - hour) / 1.6);
+    for (const person of world.population.people) {
+      if (awayAtCamp.has(person.home)) continue;
+      const clearingSnow = season === 'winter' && person.activity === 'dig';
+      const door = clearingSnow ? houseDoor(person.home) : null;
+      const walk = clearingSnow ? measureWalk([door, { x: door.x + 7, y: door.y + 9 }]) : person.walk;
+      const travel = clearingSnow ? walk.distance / 3 : person.travel || walk.distance / person.speed;
+      const outside = person.duration * (season === 'winter' && person.activity === 'talk' ? 0.45 : 1);
+      const age = wrap(motion + person.offset, travel * 2 + outside + 18);
+      if (age < 9 || age > travel * 2 + outside + 9 || daylight < 0.02) continue;
+      const elapsed = age - 9;
+      const working = elapsed >= travel && elapsed < travel + outside;
+      if (working && person.activity === 'visit') continue;
+      const returning = elapsed >= travel + outside;
+      const progress = returning ? 1 - (elapsed - travel - outside) / travel : Math.min(1, elapsed / travel);
+      const position = walkPosition(walk, progress);
+      if (returning) position.direction *= -1;
+      if (working && person.meeting) Object.assign(position, person.meeting, { direction: person.partnerSide });
+      const fade = smooth(elapsed / 1.1) * smooth((travel * 2 + outside - elapsed) / 1.1);
+      actors.push({ ...person, ...position, kind: 'person', moving: !working, working,
+        activity: clearingSnow ? 'shovel' : person.activity, alpha: daylight * fade });
+    }
+    for (const pet of world.population.pets) {
+      const travel = pet.walk.distance / pet.speed;
+      const age = wrap(motion + pet.offset, travel + 13);
+      const position = walkPosition(pet.walk, Math.min(1, age / travel));
+      if (pet.kind === 'dog') {
+        const dog = nightDog(pet, position, motion, hour, age < travel);
+        if (dog) actors.push(dog);
+        continue;
+      }
+      actors.push({ ...pet, ...position, moving: age < travel, alpha: mix(0.55, 1, daylight) });
+    }
+    for (const animal of world.population.wildlife) {
+      if (season === 'winter' && animal.kind === 'bear') continue;
+      const cycle = Math.floor((motion + animal.offset) / animal.interval);
+      const age = wrap(motion + animal.offset, animal.interval);
+      const route = animal.routes[cycle % animal.routes.length];
+      const duration = Math.min(animal.interval * 0.72, route.distance / animal.speed);
+      if (age > duration) continue;
+      const progress = age / duration;
+      const grazing = animal.kind === 'deer' && progress > 0.4 && progress < 0.6;
+      const distance = animal.kind === 'deer' ? (progress < 0.4 ? progress * 1.25
+        : progress < 0.6 ? 0.5 : 0.5 + (progress - 0.6) * 1.25) : progress;
+      const p = walkPosition(route, distance);
+      const fade = smooth(age / 2.5) * smooth((duration - age) / 2.5);
+      actors.push({ ...animal, ...p, moving: !grazing, alpha: fade, wild: true,
+        coat: animal.kind === 'hare' && season === 'winter' ? '#e1e1d5' :
+          { hare: '#bdbaa4', fox: '#c88648', wolf: '#898e90', deer: '#b4956b', bear: '#80664d' }[animal.kind],
+        patch: animal.kind === 'fox' ? '#e3d1ae' : '#c6bda5' });
+    }
+    if (season === 'autumn') actors.push(...fallingLeaves(world, motion));
+    return actors.sort((a, b) => a.y - b.y);
+  }
+
+  function nightDog(dog, dayPosition, motion, hour, dayMoving) {
+    const age = wrap(hour - 19.5, 24);
+    if (age > 12) return { ...dog, ...dayPosition, moving: dayMoving, alpha: 1 };
+    const night = smooth(age / 1.3) * (1 - smooth((age - 10.3) / 1.2));
+    if (dog.nightRole === 'away') {
+      const returning = age >= 9.7;
+      if (age > 2.4 && !returning) return null;
+      const progress = returning ? 1 - clamp((age - 9.7) / 1.7) : clamp(age / 2.4);
+      const position = walkPosition(dog.nightWalk, progress);
+      if (returning) position.direction *= -1;
+      const transition = returning ? 1 - smooth((age - 11.4) / 0.6) : smooth(age / 0.35);
+      const alpha = 1 - smooth((progress - 0.91) / 0.09);
+      if (alpha < 0.01) return null;
+      return { ...dog, ...position, x: mix(dayPosition.x, position.x, transition),
+        y: mix(dayPosition.y, position.y, transition), moving: true, alpha };
+    }
+    if (dog.nightRole === 'patrol') {
+      const patrolTravel = dog.walk.distance / 2.1;
+      const phase = wrap(motion + dog.offset, patrolTravel + 72);
+      const position = walkPosition(dog.walk, Math.min(1, phase / patrolTravel));
+      const sleeping = night > 0.7 && phase >= patrolTravel;
+      return { ...dog, ...position, x: mix(dayPosition.x, position.x, night),
+        y: mix(dayPosition.y, position.y, night), moving: night > 0.7 ? !sleeping : dayMoving,
+        sleeping, alpha: 1 };
+    }
+    return { ...dog, ...dayPosition, x: mix(dayPosition.x, dog.sleepSpot.x, night),
+      y: mix(dayPosition.y, dog.sleepSpot.y, night), direction: night > 0.7 ? dog.home.face : dayPosition.direction,
+      moving: night < 0.7 && dayMoving,
+      sleeping: night > 0.7, alpha: 1 };
+  }
+
+  function drawGroundActor(g, actor, motion) {
+    if (actor.alpha < 0.01) return;
+    if (actor.kind === 'leafParticle') {
+      g.globalAlpha = actor.alpha;
+      pixels(g, actor.color, actor.x, actor.leafY, actor.wide ? 2 : 1);
+      g.globalAlpha = 1;
+      return;
+    }
+    if (actor.kind === 'fire') {
+      drawCampfire(g, actor, motion);
+      return;
+    }
+    const scale = mix(0.58, 1.02, clamp((actor.y - 151) / 110));
+    const stride = actor.moving ? Math.sin(motion * (actor.kind === 'hare' ? 15 : 9) + actor.offset) : 0;
+    const hop = actor.kind === 'hare' ? Math.max(0, stride) * 3 : 0;
+    g.save();
+    g.globalAlpha = actor.alpha * 0.26;
+    ellipse(g, '#172b2a', actor.x + 1, actor.y, (actor.kind === 'bear' ? 7 : 4) * scale, scale * 1.3);
+    g.globalAlpha = actor.alpha;
+    g.translate(Math.round(actor.x), Math.round(actor.y));
+    g.scale(actor.direction * scale, scale);
+    if (actor.kind === 'dog' && actor.sleeping) {
+      ellipse(g, actor.coat, 0, -2, 4, 2);
+      pixels(g, actor.patch, -2, -2, 3, 2);
+      ellipse(g, actor.coat, 3, -1, 2, 1);
+      pixels(g, '#423c38', 3, -1, 2);
+      pixels(g, actor.coat, 2, -3, 2, 2);
+      trace(g, actor.coat, -3, -1, -5, -2);
+      const twitch = wrap(motion + actor.offset, 17) < 0.2 ? 1 : 0;
+      pixels(g, actor.patch, 0, twitch, 3);
+      g.restore();
+      return;
+    }
+    if (actor.kind === 'person') {
+      if (actor.seated) {
+        pixels(g, '#62503e', -4, -2, 7, 2);
+        pixels(g, '#423c37', -3, 0, 2);
+        trace(g, '#444953', 0, -3, 4, -3);
+        trace(g, '#353e49', 4, -3, 5, 0);
+        pixels(g, actor.shirt, -2, -8, 4, 5);
+        pixels(g, actor.skin, -1, -11, 3, 3);
+        pixels(g, actor.hair, -1, -12, 3, 2);
+        const gesture = Math.sin(motion * 1.8 + actor.offset) > 0.4 ? -1 : 1;
+        trace(g, actor.shirt, 0, -6, 3, -5 + gesture);
+        pixels(g, actor.skin, 3, -5 + gesture);
+        g.restore();
+        return;
+      }
+      const digging = actor.working && (actor.activity === 'dig' || actor.activity === 'shovel');
+      const bend = digging ? (Math.sin(motion * 4) + 1) * 0.8 : 0;
+      trace(g, '#444953', -1, -4, -2 + stride, 0);
+      trace(g, '#353e49', 1, -4, 2 - stride, 0);
+      pixels(g, '#3b3936', -3 + stride, 0, 2);
+      pixels(g, '#3b3936', 1 - stride, 0, 2);
+      pixels(g, actor.shirt, -2 + bend, -9 + bend, 5, 6);
+      pixels(g, actor.skin, -1 + bend, -12 + bend, 4, 4);
+      pixels(g, actor.hair, -1 + bend, -13 + bend, 4, 2);
+      if (season === 'winter') {
+        pixels(g, actor.shirt, -2 + bend, -14 + bend, 5, 2);
+        pixels(g, '#d9a976', -1 + bend, -8 + bend, 4);
+        pixels(g, '#d9a976', 2 + bend, -7 + bend, 1, 3);
+      }
+      pixels(g, '#514943', 2 + bend, -10 + bend);
+      const arm = digging ? 2 + bend : actor.working ? Math.sin(motion * 2 + actor.offset) * 1.3 : stride;
+      trace(g, actor.shirt, 1 + bend, -8 + bend, 4, -6 + arm);
+      pixels(g, actor.skin, 4, -6 + arm);
+      if (digging) {
+        trace(g, '#b99c6e', 4, -8 + bend, 7 - bend, -1);
+        pixels(g, '#7d898a', 6 - bend, -1, 3, 2);
+        if (Math.sin(motion * 4) > 0.7) pixels(g, actor.activity === 'shovel' ? '#d8e4ed' : '#746040', 8, -2, 2);
+      }
+    } else {
+      const kind = actor.kind;
+      const large = kind === 'bear' || kind === 'deer';
+      const body = kind === 'bear' ? 10 : kind === 'deer' ? 9 : kind === 'hare' ? 5 : 7;
+      const height = kind === 'bear' ? 6 : kind === 'hare' ? 4 : 4;
+      const legs = kind === 'deer' ? 6 : large ? 3 : 2;
+      const base = -legs - hop;
+      for (const x of [-body / 2 + 1, body / 2 - 1]) {
+        trace(g, actor.coat, x, base, x + stride * (large ? 1 : 1.5), -hop);
+        trace(g, actor.patch, x + 1, base, x - stride, -hop);
+      }
+      ellipse(g, actor.coat, 0, base - height * 0.45, body * 0.64, height * 0.69);
+      if (kind === 'deer') {
+        polygon(g, actor.coat, [[2, base - 2], [4, base - 9], [7, base - 10], [6, base], [3, base]]);
+        ellipse(g, actor.coat, 6, base - 9, 3, 2);
+        trace(g, '#c8ba93', 5, base - 10, 3, base - 15);
+        trace(g, '#c8ba93', 3, base - 13, 1, base - 14);
+        trace(g, '#c8ba93', 6, base - 11, 8, base - 15);
+        trace(g, '#c8ba93', 7, base - 13, 9, base - 14);
+        pixels(g, '#303a36', 8, base - 9);
+      } else {
+        const head = body * 0.52;
+        ellipse(g, actor.coat, head, base - height, kind === 'bear' ? 3 : 2, 2);
+        pixels(g, actor.patch, head + 1, base - height + 1, kind === 'wolf' ? 3 : 2);
+        pixels(g, '#333931', head + (kind === 'wolf' ? 3 : 2), base - height);
+        const ear = kind === 'hare' ? 5 : kind === 'bear' ? 2 : 3;
+        pixels(g, actor.coat, head - 1, base - height - ear, 1, ear);
+        pixels(g, actor.coat, head + 1, base - height - ear + 1, 1, ear);
+        if (kind === 'cat') {
+          trace(g, actor.coat, -4, base - 1, -6, base - 5);
+          trace(g, actor.coat, -6, base - 5, -5, base - 7);
+          pixels(g, actor.patch, -1, base - 3, 2, 2);
+        } else if (kind !== 'bear' && kind !== 'hare') {
+          const tailY = base + (kind === 'dog' ? -3 + Math.sin(motion * 8) : 0);
+          trace(g, actor.coat, -4, base - 2, -9, tailY, kind === 'fox' ? 2 : 1);
+          pixels(g, actor.patch, -10, tailY, 2);
+        }
+        if (kind === 'hare') pixels(g, actor.patch, -4, base - 2, 2, 2);
+      }
+    }
+    g.restore();
+  }
+
+  function drawCampfire(g, fire, motion) {
+    const { x, y, flame, embers } = fire;
+    ellipse(g, '#303434', x, y, 6, 2);
+    for (const [dx, dy] of [[-5, 0], [-3, 2], [1, 2], [5, 0], [2, -2], [-2, -2]]) {
+      pixels(g, '#77786e', x + dx, y + dy, 2);
+    }
+    trace(g, '#72503a', x - 3, y - 1, x + 3, y + 1, 2);
+    trace(g, '#503d32', x - 3, y + 1, x + 3, y - 1, 2);
+    if (embers > 0) {
+      g.globalAlpha = embers * (0.65 + Math.sin(motion * 5) * 0.12);
+      pixels(g, '#e37936', x - 2, y - 1, 4, 2);
+      pixels(g, '#f1b65a', x, y - 1);
+      g.globalAlpha = 1;
+    }
+    if (flame < 0.01) return;
+    for (let tongue = 0; tongue < 3; tongue++) {
+      const dx = tongue * 2 - 2;
+      const wave = Math.sin(motion * (9 + tongue * 3) + tongue * 2);
+      const height = (5 + (wave + 1) * 2 + (tongue === 1 ? 3 : 0)) * flame;
+      polygon(g, '#e67d35', [[x + dx - 2, y], [x + dx - 1, y - height * 0.44],
+        [x + dx + wave, y - height], [x + dx + 1, y - height * 0.5], [x + dx + 2, y]]);
+      polygon(g, '#ffd080', [[x + dx - 1, y], [x + dx, y - height * 0.68], [x + dx + 1, y]]);
+    }
+    pixels(g, '#fff0b8', x - 1, y - 2, 3, 2);
+    for (let spark = 0; spark < 3; spark++) {
+      const age = wrap(motion * 0.65 + spark * 0.31, 1);
+      g.globalAlpha = (1 - age) * flame * 0.7;
+      pixels(g, '#f0c985', x + Math.sin(motion + spark) * 3, y - 5 - age * 14);
+    }
+    g.globalAlpha = 1;
+  }
+
+  const flyingSpecies = {
+    gull: { count: [1, 2], speed: 13, size: 1, flap: 2.3, body: '#e9e5d1', wing: '#c3c9c7', tip: '#384650', belly: '#faf0d4', beak: '#d8aa55' },
+    pigeon: { count: [3, 5], speed: 20, size: 0.86, flap: 5.2, body: '#8a95a8', wing: '#606e85', tip: '#364253', belly: '#c6bbc1', beak: '#c5b6a0' },
+    stork: { count: [1, 2], speed: 10, size: 1.35, flap: 1.6, body: '#f3e6cb', wing: '#dad9c8', tip: '#2e3941', belly: '#fff1d5', beak: '#dc7854' },
+    tit: { count: [3, 5], speed: 23, size: 0.72, flap: 7.1, body: '#d7bd50', wing: '#668e9a', tip: '#344a54', belly: '#f7dc6a', beak: '#353d3e' },
+    sparrow: { count: [3, 5], speed: 21, size: 0.72, flap: 6.6, body: '#ac8059', wing: '#896344', tip: '#544a3e', belly: '#d9c298', beak: '#d5ad6b' },
+    owl: { count: [1, 2], speed: 11, size: 1.13, flap: 2.2, night: true, body: '#897b6b', wing: '#72685e', tip: '#4a4850', belly: '#c1ac87', beak: '#ceac72' },
+    littleOwl: { count: [1, 2], speed: 15, size: 0.81, flap: 3.5, night: true, body: '#9b8c75', wing: '#7d7565', tip: '#514e50', belly: '#c4ba98', beak: '#c4ae79' },
+    eagleOwl: { count: [1, 2], speed: 9, size: 1.4, flap: 1.8, night: true, body: '#99816b', wing: '#796753', tip: '#484650', belly: '#bfa37c', beak: '#bd9c69' },
+    bat: { count: [3, 5], speed: 21, size: 0.86, flap: 9, night: true, body: '#4e4358', wing: '#5f516e', tip: '#2b2d42', belly: '#8a7382', beak: '#4e4358' }
+  };
+
+  function createFlocks(code) {
+    const random = randomFrom(hash(code + '/птицы'));
+    return Object.keys(flyingSpecies).concat(['bat']).map((species, index) => {
+      const type = flyingSpecies[species];
+      const count = type.night && species !== 'bat' ? (random() < 0.8 ? 1 : 2)
+        : integer(random, ...type.count);
+      return { species, seed: integer(random, 1, 2 ** 30), offset: between(random, 0, 60) + index * 7,
+        members: Array.from({ length: count }, (_, member) => ({
+          phase: between(random, 0, Math.PI * 2), pace: between(random, 0.76, 1.27),
+          size: between(random, 0.83, 1.13), rank: member - (count - 1) / 2,
+          eyePeriod: between(random, 7, 14), eyeOffset: between(random, 0, 14)
+        })) };
+    });
+  }
+
+  function flockFlight(flock, motion) {
+    const type = flyingSpecies[flock.species];
+    const crossing = (W + 156) / type.speed;
+    const period = crossing + 9;
+    const elapsed = motion + flock.offset;
+    const cycle = Math.floor(elapsed / period);
+    const age = wrap(elapsed, period);
+    const random = randomFrom(flock.seed ^ Math.imul(cycle + 1, 2654435761));
+    const direction = random() < 0.5 ? -1 : 1;
+    const altitude = between(random, 27, 89);
+    const slope = between(random, -0.035, 0.035);
+    const distance = age * type.speed;
+    const x = direction > 0 ? -78 + distance : W + 78 - distance;
+    const y = altitude + slope * (distance - W / 2) + Math.sin(age * 0.17) * 7;
+    return { x, y, direction, age, visible: age < crossing, depth: between(random, 0.82, 1.17) };
+  }
+
+  function memberFlight(flock, member, flight, motion) {
+    const type = flyingSpecies[flock.species];
+    const t = motion * member.pace;
+    const phase = member.phase;
+    const bat = flock.species === 'bat';
+    const small = type.count[0] >= 3;
+    const forward = member.rank * (small ? 8 : 17) + Math.sin(t * (bat ? 1.62 : 0.67) + phase) * (small ? 13 : 3)
+      + Math.sin(t * 1.87 + phase * 2) * (bat ? 8 : small ? 3 : 0.8);
+    const flutter = Math.sin(t * (bat ? 2.8 : 1.13) + phase) * (bat ? 8 : small ? 4 : 1.4);
+    const dive = bat ? Math.sin(t * 0.9 + phase) * Math.abs(Math.sin(t * 0.9 + phase)) * 13 : 0;
+    const y = flight.y + member.rank * (small ? 2.4 : 5) + flutter + dive;
+    const dx = flight.direction * (type.speed + member.pace *
+      (Math.cos(t * (bat ? 1.62 : 0.67) + phase) * (small ? 13 : 3) * (bat ? 1.62 : 0.67)
+        + Math.cos(t * 1.87 + phase * 2) * (bat ? 8 : small ? 3 : 0.8) * 1.87));
+    return { x: flight.x + forward * flight.direction, y,
+      direction: bat && Math.abs(dx) > 4 ? Math.sign(dx) : flight.direction,
+      bank: clamp(Math.cos(t * (bat ? 2.8 : 1.13) + phase) * (bat ? 1 : 0.3), -1, 1),
+      scale: type.size * member.size * flight.depth };
+  }
+
+  function birdColors(type, sun, moon, fog) {
+    const light = moon.darkness;
+    const tint = sun.active ? sun.color : [128, 155, 204];
+    const warmth = sun.active ? (1 - sun.elevation) * sun.direct * 0.19 : 0;
+    const shades = {};
+    for (const key of ['body', 'wing', 'tip', 'belly', 'beak']) {
+      const dayColor = rgb(type[key]);
+      const nightColor = dayColor.map((channel, i) => channel * (0.28 + moon.direct * 0.23) + [9, 13, 27][i]);
+      let color = blendRgb(dayColor, nightColor, light);
+      color = blendRgb(color, tint, warmth);
+      shades[key] = cssColor(blendRgb(color, [120, 137, 148], fog * 0.19));
+    }
+    return shades;
+  }
+
+  function drawFlyingBird(g, species, colors, wing, bank) {
+    const stork = species === 'stork';
+    const small = species === 'tit' || species === 'sparrow';
+    const owl = flyingSpecies[species].night;
+    const span = small ? 4 : species === 'gull' ? 7 : stork ? 8 : 6;
+    const lift = wing * (small ? 3 : 4.5);
+    const wingBase = -1;
+    polygon(g, colors.tip, [[-2, wingBase], [-span - 1, -lift + bank * 2],
+      [-span + 1, -lift + 2 + bank * 2], [0, 2]]);
+    polygon(g, colors.wing, [[-1, -1], [span, -lift - bank * 2],
+      [span - 1, -lift + 2 - bank * 2], [1, 2]]);
+    trace(g, colors.belly, 0, -1, span - 1, -lift - bank * 2);
+    polygon(g, colors.tip, [[-2, 0], [-5, 1], [-6, 3], [-2, 2]]);
+    pixels(g, colors.body, -2, 0, 5, 2);
+    pixels(g, colors.belly, -1, 2, 3);
+    if (stork) {
+      trace(g, colors.belly, 2, 0, 5, -2);
+      pixels(g, colors.belly, 4, -3, 3, 2);
+      pixels(g, colors.beak, 7, -2, 4);
+      trace(g, colors.beak, -2, 2, -7, 4);
+      trace(g, colors.beak, -3, 2, -8, 3);
+    } else {
+      pixels(g, colors.body, 2, -2, owl ? 3 : 2, 3);
+      pixels(g, colors.beak, owl ? 5 : 4, -1, small ? 1 : 2);
+      if (species === 'tit') {
+        pixels(g, colors.tip, 2, -2, 2, 2);
+        pixels(g, colors.belly, 2, 0);
+      }
+      if (species === 'pigeon') {
+        pixels(g, '#68877f', 1, 0, 2);
+        trace(g, colors.tip, span - 3, -lift + 1, span - 2, -lift + 2);
+      }
+      if (owl) {
+        pixels(g, colors.belly, 2, -1, 2, 2);
+        pixels(g, colors.tip, 3, -1);
+        pixels(g, colors.tip, -1, 1);
+        if (species === 'eagleOwl') {
+          pixels(g, colors.body, 2, -4, 1, 2);
+          pixels(g, colors.body, 4, -3, 1, 2);
+        }
+      }
+    }
+  }
+
+  function drawBat(g, colors, wing, bank) {
+    const lift = wing * 4.8;
+    for (const side of [-1, 1]) {
+      const tilt = bank * side * 2;
+      polygon(g, colors.tip, [[0, 0], [side * 3, -2], [side * 7, -lift + tilt - 1],
+        [side * 6, -lift + tilt + 2], [side * 5, 2 + tilt], [side * 4, 1],
+        [side * 3, 4 + tilt], [side * 2, 2], [side, 4]]);
+      polygon(g, colors.wing, [[0, 0], [side * 3, -1], [side * 6, -lift + tilt],
+        [side * 4, 1 + tilt], [side * 3, 1], [side * 2, 2]]);
+      trace(g, colors.belly, side, 0, side * 6, -lift + tilt);
+    }
+    pixels(g, colors.body, -1, -1, 3, 5);
+    pixels(g, colors.body, -1, -3, 1, 2);
+    pixels(g, colors.body, 1, -3, 1, 2);
+    pixels(g, colors.tip, 0, 3, 1, 2);
+  }
+
+  function drawFlocks(world, hour, motion, weather, sun, moon) {
+    if (season === 'winter') return;
+    const daytime = smooth((hour - 5.4) / 1.2) * smooth((20.3 - hour) / 1.4);
+    for (const flock of world.flocks) {
+      const type = flyingSpecies[flock.species];
+      const presence = type.night ? 1 - daytime : daytime;
+      if (presence < 0.02) continue;
+      const flight = flockFlight(flock, motion);
+      if (!flight.visible) continue;
+      const shades = birdColors(type, sun, moon, weather.fog);
+      for (const member of flock.members) {
+        const pose = memberFlight(flock, member, flight, motion);
+        if (pose.x < -22 || pose.x > W + 22) continue;
+        const beat = motion * type.flap * Math.PI * 2 + member.phase;
+        const glide = type.flap < 3 && Math.sin(motion * 0.47 + member.phase) > 0.35;
+        const wing = glide ? 0.15 + Math.sin(motion * 1.1 + member.phase) * 0.15 : Math.sin(beat);
+        ctx.save();
+        ctx.globalAlpha = presence * (1 - weather.rain * 0.27);
+        ctx.translate(Math.round(pose.x), Math.round(pose.y));
+        ctx.scale(pose.direction * pose.scale, pose.scale);
+        if (flock.species === 'bat') drawBat(ctx, shades, wing, pose.bank);
+        else drawFlyingBird(ctx, flock.species, shades, wing, pose.bank);
+        if (type.night && flock.species !== 'bat') {
+          const blink = wrap(motion + member.eyeOffset, member.eyePeriod);
+          if (blink < 0.14 || (blink > 0.31 && blink < 0.39)) {
+            ctx.globalAlpha = presence * 0.85;
+            pixels(ctx, flock.species === 'eagleOwl' ? '#e9a459' : '#ebd399', 3, -1);
+          }
+        }
+        ctx.restore();
+      }
+    }
+  }
+
+  let world;
+  let layers;
+  let simulatedMinutes = START_HOUR * 60;
+  let motion = 0;
+  let paused = false;
+  let weather;
+  let frame = 0;
+  let lastRender = 0;
+
+  const currentWeather = () => weatherAt(world, simulatedMinutes / 60, weatherPicker.value, coverPicker.value);
+
+  function showWeatherNow() {
+    weather = currentWeather();
+    render();
+  }
+
+  function render() {
+    if (!world) return;
+    const hour = simulatedMinutes / 60;
+    const light = lightingAt(hour);
+    const clouds = cloudState(world, motion, weather.level);
+    const sun = sunlightAt(world, hour, weather, clouds);
+    const moon = moonlightAt(world, hour, weather, clouds);
+    drawSky(world, light, motion, weather, clouds, sun, moon);
+    drawFlocks(world, hour, motion, weather, sun, moon);
+    drawLand(world, layers, light, hour, motion, weather, clouds, sun, moon);
+    const minutes = Math.floor(simulatedMinutes);
+    if (clock.valueAsNumber !== minutes) clock.value = minutes;
+    const display = [Math.floor(minutes / 60), minutes % 60].map(value => String(value).padStart(2, '0')).join(':');
+    if (byId('time-label').textContent !== display) byId('time-label').textContent = display;
+    clock.setAttribute('aria-valuetext', display);
+  }
+
+  function tick(now) {
+    frame = 0;
+    const elapsed = now - lastRender;
+    if (elapsed >= 40) {
+      const dt = Math.min(elapsed / 1000, 0.15);
+      lastRender = now;
+      simulatedMinutes = wrap(simulatedMinutes + dt * DAY_MINUTES / DAY_SECONDS, DAY_MINUTES);
+      motion += dt;
+      const target = currentWeather();
+      for (const key of Object.keys(weather)) weather[key] = mix(weather[key], target[key], 1 - Math.exp(-dt * 0.83));
+      render();
+    }
+    startClock();
+  }
+
+  function startClock() {
+    if (!frame && !paused && !document.hidden) frame = requestAnimationFrame(tick);
+  }
+
+  function resetClock() {
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+    lastRender = performance.now();
+    startClock();
+  }
+
+  function freshCode() {
+    return Array.from(crypto.getRandomValues(new Uint32Array(2)),
+      value => value.toString(36).padStart(7, '0')).join('-');
+  }
+
+  const normalizeCode = value => Array.from(value.trim()).slice(0, 48).join('');
+
+  function codeFromUrl() {
+    try {
+      return normalizeCode(decodeURIComponent(location.hash.slice(1)));
+    } catch {
+      return '';
+    }
+  }
+
+  function selectVillage(code) {
+    world = generateWorld(code);
+    world.population = createGroundPopulation(world);
+    world.flocks = createFlocks(code);
+    world.cloudLayers = generateCloudLayers(code);
+    const fragment = '#' + encodeURIComponent(code);
+    if (location.hash !== fragment) {
+      try { history.replaceState(null, '', fragment); }
+      catch { location.hash = fragment; }
+    }
+    seedField.value = code;
+    motion = 0;
+    rebuildSeason();
+    showWeatherNow();
+    resetClock();
+  }
+
+  function rebuildSeason() {
+    seasonalColors = Object.fromEntries(Object.entries(colors).map(([phase, base]) =>
+      [phase, seasonalPalette(base, phase)]));
+    world.seasonEffects = createSeasonEffects(world);
+    world.moonMasks = paintMoonlight(world);
+    layers = Object.fromEntries(Object.entries(seasonalColors).map(([phase, palette]) =>
+      [phase, paintLand(world, palette)]));
+    shadowPosition = -1;
+    weatherPicker.querySelector('option[value="rain"]').textContent = season === 'winter' ? 'Снег' : 'Дождь';
+  }
+
+  for (const button of document.querySelectorAll('[data-season]')) {
+    button.addEventListener('click', () => {
+      if (season === button.dataset.season) return;
+      season = button.dataset.season;
+      for (const option of document.querySelectorAll('[data-season]')) {
+        option.setAttribute('aria-pressed', option === button);
+      }
+      rebuildSeason();
+      showWeatherNow();
+      resetClock();
+    });
+  }
+
+  function togglePause() {
+    paused = !paused;
+    const label = paused ? 'Продолжить' : 'Пауза';
+    pauseButton.setAttribute('aria-pressed', paused);
+    pauseButton.setAttribute('aria-label', label);
+    pauseButton.title = label + ' (пробел)';
+    pauseButton.querySelector('.action-label').textContent = label;
+    pauseButton.querySelector('.compact-icon').textContent = paused ? '▶' : 'Ⅱ';
+    resetClock();
+  }
+
+  function openSettings(open) {
+    settings.hidden = !open;
+    settingsToggle.setAttribute('aria-expanded', open);
+  }
+
+  function toggleInterface() {
+    ui.hidden = !ui.hidden;
+    if (ui.hidden) {
+      openSettings(false);
+      canvas.focus({ preventScroll: true });
+    } else {
+      settingsToggle.focus({ preventScroll: true });
+    }
+  }
+
+  byId('regenerate').addEventListener('click', () => selectVillage(freshCode()));
+  byId('seed-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const code = normalizeCode(seedField.value);
+    if (code) selectVillage(code);
+  });
+  window.addEventListener('hashchange', () => {
+    const code = codeFromUrl();
+    if (code !== world.code) selectVillage(code || freshCode());
+  });
+
+  clock.addEventListener('input', () => {
+    simulatedMinutes = clock.valueAsNumber;
+    world.seasonEffects.previous.clear();
+    showWeatherNow();
+  });
+  for (const control of [weatherPicker, coverPicker]) {
+    control.addEventListener('change', () => {
+      if (paused) showWeatherNow();
+    });
+  }
+
+  settingsToggle.addEventListener('click', () => openSettings(settings.hidden));
+  byId('hide-ui').addEventListener('click', toggleInterface);
+  canvas.addEventListener('click', () => {
+    if (ui.hidden) toggleInterface();
+    else openSettings(false);
+  });
+  pauseButton.addEventListener('click', togglePause);
+
+  if (!document.fullscreenEnabled) fullscreenButton.hidden = true;
+  fullscreenButton.addEventListener('click', async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await byId('village').requestFullscreen();
+    } catch {
+      fullscreenButton.hidden = true;
+    }
+  });
+  document.addEventListener('fullscreenchange', () => {
+    const label = document.fullscreenElement ? 'Выйти из полного экрана' : 'На весь экран';
+    fullscreenButton.setAttribute('aria-label', label);
+    fullscreenButton.querySelector('.action-label').textContent = label;
+  });
+  document.addEventListener('visibilitychange', resetClock);
+  document.addEventListener('keydown', event => {
+    if (event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
+    if (event.key === 'Escape') {
+      if (ui.hidden) toggleInterface();
+      else if (!settings.hidden) {
+        openSettings(false);
+        settingsToggle.focus();
+      }
+      return;
+    }
+    if (event.target.closest('input, select')) return;
+    if (event.code === 'Space' && !event.target.closest('button')) {
+      event.preventDefault();
+      togglePause();
+    }
+    if (event.code === 'KeyH') toggleInterface();
+  });
+
+  selectVillage(codeFromUrl() || freshCode());
+})();
+</script>
+</body>
+</html>
