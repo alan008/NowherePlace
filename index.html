@@ -167,6 +167,10 @@
               <option value="5">Сплошная</option>
             </select>
           </label>
+          <label for="music-volume">Громкость музыки
+            <input id="music-volume" type="range" min="0" max="100" value="35" step="1">
+          </label>
+          <output id="music-status" role="status" hidden></output>
           <form class="seed-row" id="seed-form">
             <label for="seed">Код деревни
               <input id="seed" class="seed-input" type="text" maxlength="48" autocomplete="off" spellcheck="false">
@@ -176,9 +180,10 @@
           <button id="hide-ui" type="button" title="Скрыть интерфейс (H)">Скрыть интерфейс</button>
         </section>
         <div class="actions">
+          <button id="music-toggle" type="button" aria-label="Включить музыку" aria-pressed="false" title="Включить музыку"><span class="action-label">Музыка</span><span class="compact-icon" aria-hidden="true">♪</span></button>
           <button id="pause" type="button" aria-label="Пауза" aria-pressed="false" title="Пауза (пробел)"><span class="action-label">Пауза</span><span class="compact-icon" aria-hidden="true">Ⅱ</span></button>
           <button id="fullscreen" type="button" aria-label="На весь экран"><span class="action-label">На весь экран</span><span class="compact-icon" aria-hidden="true">⛶</span></button>
-          <button id="settings-toggle" type="button" aria-expanded="false" aria-controls="settings">Настройки</button>
+          <button id="settings-toggle" type="button" aria-label="Настройки" title="Настройки" aria-expanded="false" aria-controls="settings"><span class="action-label">Настройки</span><span class="compact-icon" aria-hidden="true">⚙</span></button>
         </div>
       </div>
     </div>
@@ -2761,6 +2766,378 @@
     }
   }
 
+  // Each row is a sixteenth note. Instruments and effects are synthesized locally.
+  const musicScores = {
+    spring: {
+      bpm: 112, root: 60, scale: [0, 2, 4, 5, 7, 9, 11], chords: [0, 3, 4, 0, 5, 3, 1, 4],
+      lead: 'pluck', brightness: 3400, arpLevel: 0.022, padLevel: 0.026, bassLevel: 0.085, leadLevel: 0.075,
+      melody: [
+        '7 -1 9 11 -1 9 8 -1 7 -1 4 -1 5 7 -1 -1',
+        '8 -1 10 -1 12 -1 10 9 8 -1 5 -1 7 -1 -1 -1',
+        '11 -1 10 9 8 -1 6 -1 8 -1 9 -1 10 8 -1 -1',
+        '9 -1 8 -1 7 -1 4 5 7 -1 -1 9 8 7 -1 -1',
+        '12 -1 11 9 -1 11 12 -1 14 -1 12 -1 11 9 -1 -1',
+        '10 -1 8 -1 7 8 10 -1 12 -1 10 -1 9 8 -1 -1',
+        '8 -1 9 10 11 -1 9 -1 8 -1 6 -1 7 8 -1 -1',
+        '11 -1 10 -1 9 -1 8 -1 7 -1 -1 -1 4 -1 6 -1'
+      ]
+    },
+    summer: {
+      bpm: 76, root: 57, scale: [0, 2, 4, 5, 7, 9, 11], chords: [0, 3, 1, 4, 5, 3, 4, 0],
+      lead: 'flute', brightness: 2200, arpLevel: 0.018, padLevel: 0.031, bassLevel: 0.068, leadLevel: 0.069,
+      melody: [
+        '9 -1 -1 -1 8 -1 7 -1 -1 -1 4 -1 7 -1 -1 -1',
+        '8 -1 -1 -1 10 -1 -1 -1 9 -1 8 -1 7 -1 -1 -1',
+        '8 -1 -1 -1 6 -1 -1 -1 4 -1 6 -1 8 -1 -1 -1',
+        '11 -1 -1 -1 9 -1 8 -1 -1 -1 6 -1 4 -1 -1 -1',
+        '12 -1 -1 -1 11 -1 9 -1 -1 -1 7 -1 9 -1 -1 -1',
+        '10 -1 -1 -1 8 -1 -1 -1 7 -1 5 -1 8 -1 -1 -1',
+        '9 -1 -1 -1 8 -1 -1 -1 6 -1 4 -1 6 -1 -1 -1',
+        '8 -1 -1 -1 7 -1 -1 -1 4 -1 -1 -1 7 -1 -1 -1'
+      ]
+    },
+    autumn: {
+      bpm: 68, root: 50, scale: [0, 2, 3, 5, 7, 8, 10], chords: [0, 5, 2, 6, 3, 0, 4, 4],
+      lead: 'reed', brightness: 1700, arpLevel: 0.017, padLevel: 0.036, bassLevel: 0.069, leadLevel: 0.072,
+      melody: [
+        '11 -1 -1 -1 10 -1 9 -1 8 -1 -1 -1 7 -1 -1 -1',
+        '10 -1 -1 -1 9 -1 8 -1 7 -1 -1 -1 5 -1 -1 -1',
+        '9 -1 -1 -1 7 -1 -1 -1 6 -1 7 -1 8 -1 -1 -1',
+        '10 -1 -1 -1 9 -1 8 -1 6 -1 -1 -1 3 -1 -1 -1',
+        '8 -1 -1 -1 10 -1 -1 -1 9 -1 8 -1 6 -1 -1 -1',
+        '9 -1 -1 -1 8 -1 7 -1 6 -1 -1 -1 4 -1 -1 -1',
+        '8 -1 -1 -1 6 -1 -1 -1 4 -1 6 -1 8 -1 -1 -1',
+        '9 -1 -1 -1 8 -1 -1 -1 6 -1 -1 -1 7 -1 -1 -1'
+      ]
+    },
+    winter: {
+      bpm: 62, root: 54, scale: [0, 2, 3, 5, 7, 8, 11], chords: [0, 5, 3, 4, 0, 2, 5, 4],
+      lead: 'bell', brightness: 2900, arpLevel: 0.016, padLevel: 0.033, bassLevel: 0.057, leadLevel: 0.075,
+      melody: [
+        '14 -1 -1 -1 -1 -1 11 -1 -1 -1 8 -1 -1 -1 -1 -1',
+        '-1 -1 12 -1 -1 -1 -1 -1 10 -1 -1 -1 8 -1 -1 -1',
+        '10 -1 -1 -1 -1 -1 13 -1 -1 -1 -1 -1 11 -1 -1 -1',
+        '-1 -1 13 -1 -1 -1 11 -1 -1 -1 6 -1 -1 -1 -1 -1',
+        '14 -1 -1 -1 15 -1 -1 -1 -1 -1 11 -1 -1 -1 -1 -1',
+        '-1 -1 11 -1 -1 -1 -1 -1 9 -1 -1 -1 7 -1 -1 -1',
+        '12 -1 -1 -1 -1 -1 10 -1 -1 -1 8 -1 -1 -1 -1 -1',
+        '13 -1 -1 -1 11 -1 -1 -1 -1 -1 7 -1 -1 -1 -1 -1'
+      ]
+    }
+  };
+  for (const score of Object.values(musicScores)) {
+    score.melody = score.melody.map(pattern => pattern.split(' ').map(Number));
+  }
+
+  const musicButton = byId('music-toggle');
+  const musicVolume = byId('music-volume');
+  const music = { context: null, enabled: false, timer: null, bus: null, retiring: [],
+    operation: Promise.resolve(), volume: musicVolume.valueAsNumber / 100 * 0.65 };
+
+  function musicDegree(score, degree) {
+    return score.root + score.scale[wrap(degree, 7)] + Math.floor(degree / 7) * 12;
+  }
+
+  function initAudio() {
+    const AudioEngine = window.AudioContext || window.webkitAudioContext;
+    if (!AudioEngine) throw new Error('unsupported');
+    const context = new AudioEngine();
+    music.context = context;
+    const random = randomFrom(64064);
+    music.noise = context.createBuffer(1, context.sampleRate * 0.5, context.sampleRate);
+    const noise = music.noise.getChannelData(0);
+    for (let i = 0; i < noise.length; i++) noise[i] = random() * 2 - 1;
+    music.impulse = context.createBuffer(2, Math.floor(context.sampleRate * 1.65), context.sampleRate);
+    for (let channel = 0; channel < 2; channel++) {
+      const data = music.impulse.getChannelData(channel);
+      for (let i = 0; i < data.length; i++) {
+        data[i] = (random() * 2 - 1) * (1 - i / data.length) ** 3 * 0.48;
+      }
+    }
+    const compressor = context.createDynamicsCompressor();
+    compressor.threshold.value = -21;
+    compressor.knee.value = 18;
+    compressor.ratio.value = 3;
+    compressor.attack.value = 0.012;
+    compressor.release.value = 0.24;
+    music.master = context.createGain();
+    music.master.gain.value = 0;
+    music.master.connect(compressor);
+    compressor.connect(context.destination);
+  }
+
+  function createMusicBus(name) {
+    const c = music.context;
+    const score = musicScores[name];
+    const input = c.createGain();
+    const filter = c.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 7200;
+    const output = c.createGain();
+    const convolver = c.createConvolver();
+    convolver.buffer = music.impulse;
+    const reverb = c.createGain();
+    reverb.gain.value = name === 'winter' ? 0.29 : 0.17;
+    const delay = c.createDelay(2);
+    delay.delayTime.value = 60 / score.bpm * 0.75;
+    const feedback = c.createGain();
+    feedback.gain.value = name === 'winter' ? 0.33 : 0.22;
+    const echo = c.createGain();
+    echo.gain.value = name === 'winter' ? 0.22 : 0.12;
+    input.connect(filter);
+    filter.connect(output);
+    input.connect(convolver);
+    convolver.connect(reverb);
+    reverb.connect(output);
+    input.connect(delay);
+    delay.connect(feedback);
+    feedback.connect(delay);
+    delay.connect(echo);
+    echo.connect(output);
+    output.connect(music.master);
+    output.gain.setValueAtTime(0, c.currentTime);
+    output.gain.linearRampToValueAtTime(0.84, c.currentTime + 1.5);
+    return { name, input, output, score, voices: new Set(), row: 0, nextTime: c.currentTime + 0.04,
+      nodes: [input, filter, output, convolver, reverb, delay, feedback, echo] };
+  }
+
+  function retireMusicBus(bus) {
+    const now = music.context.currentTime;
+    bus.output.gain.cancelAndHoldAtTime(now);
+    bus.output.gain.linearRampToValueAtTime(0, now + 1.65);
+    bus.stopAt = now + 1.8;
+    music.retiring.push(bus);
+  }
+
+  function changeMusicSeason() {
+    if (!music.context || !music.enabled || music.context.state !== 'running') return;
+    if (music.bus?.name === season) return;
+    if (music.bus) retireMusicBus(music.bus);
+    music.bus = createMusicBus(season);
+  }
+
+  function connectVoice(bus, sources, nodes, output, pan, start, end) {
+    const panner = music.context.createStereoPanner();
+    panner.pan.value = pan;
+    output.connect(panner);
+    panner.connect(bus.input);
+    const voice = { sources, nodes: [...sources, ...nodes, panner] };
+    bus.voices.add(voice);
+    sources[0].onended = () => {
+      for (const node of voice.nodes) node.disconnect();
+      bus.voices.delete(voice);
+    };
+    for (const source of sources) {
+      source.start(start);
+      source.stop(end);
+    }
+  }
+
+  function musicNote(bus, midi, time, duration, instrument, level, pan = 0) {
+    const c = music.context;
+    const frequency = 440 * 2 ** ((midi - 69) / 12);
+    const oscillator = c.createOscillator();
+    const envelope = c.createGain();
+    const filter = c.createBiquadFilter();
+    const sources = [oscillator];
+    const nodes = [envelope, filter];
+    const pad = instrument === 'pad';
+    const bell = instrument === 'bell';
+    const attack = pad ? 0.28 : instrument === 'reed' ? 0.055 : 0.009;
+    const release = pad ? 0.85 : bell ? 1.45 : instrument === 'flute' ? 0.23 : 0.12;
+    const end = time + duration + release;
+    oscillator.type = instrument === 'pluck' || instrument === 'reed' ? 'square' : 'triangle';
+    if (bell || instrument === 'flute') oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(frequency, time);
+    filter.type = 'lowpass';
+    filter.Q.value = 0.5;
+    filter.frequency.setValueAtTime(pad ? 950 : instrument === 'bass' ? 700 : bus.score.brightness, time);
+    if (instrument === 'pluck') {
+      filter.frequency.exponentialRampToValueAtTime(700, time + duration + 0.08);
+    }
+    envelope.gain.setValueAtTime(0, time);
+    envelope.gain.linearRampToValueAtTime(level, time + Math.min(attack, duration * 0.45));
+    envelope.gain.exponentialRampToValueAtTime(Math.max(0.0001, level * (bell ? 0.12 : pad ? 0.76 : 0.44)), time + duration);
+    envelope.gain.exponentialRampToValueAtTime(0.0001, end - 0.015);
+    envelope.gain.linearRampToValueAtTime(0, end);
+    oscillator.connect(filter);
+    if (pad) {
+      const second = c.createOscillator();
+      second.type = 'triangle';
+      second.frequency.setValueAtTime(frequency, time);
+      second.detune.value = 7;
+      oscillator.detune.value = -6;
+      second.connect(filter);
+      sources.push(second);
+    }
+    if (bell || instrument === 'flute' || instrument === 'reed') {
+      const modulation = c.createOscillator();
+      const amount = c.createGain();
+      modulation.frequency.value = bell ? frequency * 1.414 : 4.6;
+      amount.gain.setValueAtTime(bell ? frequency * 1.7 : frequency * 0.004, time);
+      if (bell) amount.gain.exponentialRampToValueAtTime(frequency * 0.025, time + duration + 1);
+      modulation.connect(amount);
+      amount.connect(oscillator.frequency);
+      sources.push(modulation);
+      nodes.push(amount);
+    }
+    filter.connect(envelope);
+    connectVoice(bus, sources, nodes, envelope, pan, time, end);
+  }
+
+  function musicDrum(bus, kind, time, level) {
+    const c = music.context;
+    const gain = c.createGain();
+    if (kind === 'kick') {
+      const oscillator = c.createOscillator();
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(112, time);
+      oscillator.frequency.exponentialRampToValueAtTime(43, time + 0.13);
+      gain.gain.setValueAtTime(0, time);
+      gain.gain.linearRampToValueAtTime(level, time + 0.004);
+      gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.28);
+      oscillator.connect(gain);
+      connectVoice(bus, [oscillator], [gain], gain, 0, time, time + 0.3);
+      return;
+    }
+    const source = c.createBufferSource();
+    source.buffer = music.noise;
+    const filter = c.createBiquadFilter();
+    filter.type = kind === 'hat' ? 'highpass' : 'bandpass';
+    filter.frequency.value = kind === 'hat' ? 6500 : 1800;
+    filter.Q.value = kind === 'hat' ? 0.5 : 0.7;
+    const duration = kind === 'hat' ? 0.065 : 0.17;
+    gain.gain.setValueAtTime(0, time);
+    gain.gain.linearRampToValueAtTime(level, time + 0.003);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + duration);
+    source.connect(filter);
+    filter.connect(gain);
+    connectVoice(bus, [source], [gain, filter], gain, kind === 'hat' ? 0.28 : -0.12, time, time + duration + 0.01);
+  }
+
+  function scheduleMusicRow(bus) {
+    const { row, nextTime: time, score } = bus;
+    const step = 60 / score.bpm / 4;
+    const bar = Math.floor(row / 16);
+    const beat = row % 16;
+    const chord = score.chords[bar % 8];
+    const bright = bus.name === 'spring';
+    if (beat === 0) {
+      for (const [i, interval] of [0, 2, 4, 6].entries()) {
+        musicNote(bus, musicDegree(score, chord + interval), time + i * 0.013,
+          step * 14.7, 'pad', score.padLevel, (i - 1.5) * 0.28);
+      }
+    }
+    if (beat === 0 || beat === 8) {
+      musicNote(bus, musicDegree(score, chord + (beat === 8 ? 4 : 0)) - 12,
+        time, step * (bright ? 3 : 6), 'bass', score.bassLevel);
+    }
+    const arpSpacing = bright ? 1 : 2;
+    if (beat % arpSpacing === 0) {
+      const order = bus.name === 'winter' ? [0, 4, 2, 6, 4, 2, 6, 2] : [0, 2, 4, 6, 4, 2, 6, 4];
+      const degree = chord + 7 + order[(beat / arpSpacing) % 8];
+      musicNote(bus, musicDegree(score, degree), time, step * 0.73,
+        bus.name === 'winter' ? 'bell' : 'pluck', score.arpLevel, beat % 4 ? 0.42 : -0.42);
+    }
+    let degree = score.melody[bar % 8][beat];
+    if (degree >= 0) {
+      if (bar >= 8 && bar < 12 && beat < 8) degree += bright ? 2 : 1;
+      const duration = step * (bright ? 0.95 : bus.name === 'winter' ? 3.4 : 2.65);
+      musicNote(bus, musicDegree(score, degree), time, duration, score.lead, score.leadLevel, -0.08);
+    }
+    if (bright) {
+      if (beat === 0 || beat === 8 || (bar % 4 === 3 && beat === 14)) musicDrum(bus, 'kick', time, 0.16);
+      if (beat === 4 || beat === 12) musicDrum(bus, 'snare', time, 0.055);
+      if (beat % 2 === 0) musicDrum(bus, 'hat', time, beat % 4 ? 0.025 : 0.018);
+    } else if (bus.name === 'summer') {
+      if (beat === 0) musicDrum(bus, 'kick', time, 0.095);
+      if (beat === 12) musicDrum(bus, 'snare', time, 0.022);
+      if (beat === 4 || beat === 10) musicDrum(bus, 'hat', time, 0.013);
+    } else if (bus.name === 'autumn') {
+      if (beat === 0 && bar % 2 === 0) musicDrum(bus, 'kick', time, 0.075);
+      if (beat === 12) musicDrum(bus, 'snare', time, 0.018);
+    } else if (beat === 0 && bar % 4 === 0) {
+      musicDrum(bus, 'kick', time, 0.055);
+    }
+    bus.row = (row + 1) % 256;
+    bus.nextTime += step;
+  }
+
+  function scheduleMusic() {
+    const c = music.context;
+    if (!c || c.state !== 'running' || !music.enabled || paused || document.hidden) return;
+    const bus = music.bus;
+    if (bus.nextTime < c.currentTime - 0.1) bus.nextTime = c.currentTime + 0.025;
+    while (bus.nextTime < c.currentTime + 0.3) scheduleMusicRow(bus);
+    music.retiring = music.retiring.filter(old => {
+      if (old.stopAt > c.currentTime) return true;
+      for (const voice of old.voices) {
+        for (const source of voice.sources) source.stop();
+        for (const node of voice.nodes) node.disconnect();
+      }
+      for (const node of old.nodes) node.disconnect();
+      return false;
+    });
+  }
+
+  function updateMusicButton() {
+    musicButton.setAttribute('aria-pressed', music.enabled);
+    const label = music.enabled ? 'Выключить музыку' : 'Включить музыку';
+    musicButton.setAttribute('aria-label', label);
+    musicButton.title = label;
+  }
+
+  function syncMusicPlayback() {
+    music.operation = music.operation.then(async () => {
+      if (!music.context) return;
+      if (music.enabled && !paused && !document.hidden) {
+        await music.context.resume();
+        changeMusicSeason();
+        const now = music.context.currentTime;
+        music.master.gain.cancelAndHoldAtTime(now);
+        music.master.gain.linearRampToValueAtTime(music.volume, now + 0.12);
+        if (!music.timer) music.timer = setInterval(scheduleMusic, 25);
+        scheduleMusic();
+      } else {
+        clearInterval(music.timer);
+        music.timer = null;
+        const now = music.context.currentTime;
+        music.master.gain.cancelAndHoldAtTime(now);
+        music.master.gain.linearRampToValueAtTime(0, now + 0.06);
+        await new Promise(resolve => setTimeout(resolve, 75));
+        await music.context.suspend();
+      }
+    }).catch(() => {
+      music.enabled = false;
+      clearInterval(music.timer);
+      music.timer = null;
+      if (music.context) music.context.suspend().catch(() => {});
+      updateMusicButton();
+      byId('music-status').hidden = false;
+      byId('music-status').textContent = 'Не удалось включить звук. Нажмите «Музыка» ещё раз.';
+    });
+    return music.operation;
+  }
+
+  musicButton.addEventListener('click', () => {
+    byId('music-status').hidden = true;
+    try {
+      if (!music.context) initAudio();
+      music.enabled = !music.enabled;
+      updateMusicButton();
+      syncMusicPlayback();
+    } catch {
+      byId('music-status').hidden = false;
+      byId('music-status').textContent = 'Этот браузер не поддерживает синтез музыки.';
+      musicButton.disabled = true;
+    }
+  });
+  musicVolume.addEventListener('input', () => {
+    music.volume = musicVolume.valueAsNumber / 100 * 0.65;
+    if (music.context?.state !== 'running' || !music.enabled || paused || document.hidden) return;
+    music.master.gain.setTargetAtTime(music.volume, music.context.currentTime, 0.04);
+  });
+
   let world;
   let layers;
   let simulatedMinutes = START_HOUR * 60;
@@ -2871,6 +3248,7 @@
         option.setAttribute('aria-pressed', option === button);
       }
       rebuildSeason();
+      changeMusicSeason();
       showWeatherNow();
       resetClock();
     });
@@ -2885,6 +3263,7 @@
     pauseButton.querySelector('.action-label').textContent = label;
     pauseButton.querySelector('.compact-icon').textContent = paused ? '▶' : 'Ⅱ';
     resetClock();
+    syncMusicPlayback();
   }
 
   function openSettings(open) {
@@ -2946,7 +3325,10 @@
     fullscreenButton.setAttribute('aria-label', label);
     fullscreenButton.querySelector('.action-label').textContent = label;
   });
-  document.addEventListener('visibilitychange', resetClock);
+  document.addEventListener('visibilitychange', () => {
+    resetClock();
+    syncMusicPlayback();
+  });
   document.addEventListener('keydown', event => {
     if (event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
     if (event.key === 'Escape') {
