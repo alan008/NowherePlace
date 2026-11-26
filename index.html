@@ -4263,17 +4263,28 @@
       ]
     },
     winter: {
-      bpm: 62, root: 54, scale: [0, 2, 3, 5, 7, 8, 11], chords: [0, 5, 3, 4, 0, 2, 5, 4],
-      lead: 'bell', brightness: 2900, arpLevel: 0.016, padLevel: 0.033, bassLevel: 0.057, leadLevel: 0.075,
+      // A music-box arrangement of the traditional Jingle Bells chorus.
+      bpm: 104, root: 48, scale: [0, 2, 4, 5, 7, 9, 11],
+      chords: [0, 0, 0, 0, 3, 0, 4, 4, 0, 0, 0, 0, 3, 0, 4, 0],
+      padIntervals: [0, 2, 4],
+      lead: 'bell', brightness: 3400, arpLevel: 0.012, padLevel: 0.029, bassLevel: 0.057, leadLevel: 0.073,
       melody: [
-        '14 -1 -1 -1 -1 -1 11 -1 -1 -1 8 -1 -1 -1 -1 -1',
-        '-1 -1 12 -1 -1 -1 -1 -1 10 -1 -1 -1 8 -1 -1 -1',
-        '10 -1 -1 -1 -1 -1 13 -1 -1 -1 -1 -1 11 -1 -1 -1',
-        '-1 -1 13 -1 -1 -1 11 -1 -1 -1 6 -1 -1 -1 -1 -1',
-        '14 -1 -1 -1 15 -1 -1 -1 -1 -1 11 -1 -1 -1 -1 -1',
-        '-1 -1 11 -1 -1 -1 -1 -1 9 -1 -1 -1 7 -1 -1 -1',
-        '12 -1 -1 -1 -1 -1 10 -1 -1 -1 8 -1 -1 -1 -1 -1',
-        '13 -1 -1 -1 11 -1 -1 -1 -1 -1 7 -1 -1 -1 -1 -1'
+        '16 -1 -1 -1 16 -1 -1 -1 16 -1 -1 -1 -1 -1 -1 -1',
+        '16 -1 -1 -1 16 -1 -1 -1 16 -1 -1 -1 -1 -1 -1 -1',
+        '16 -1 -1 -1 18 -1 -1 -1 14 -1 -1 -1 15 -1 -1 -1',
+        '16 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1',
+        '17 -1 -1 -1 17 -1 -1 -1 17 -1 -1 -1 17 -1 -1 -1',
+        '17 -1 -1 -1 16 -1 -1 -1 16 -1 -1 -1 16 -1 16 -1',
+        '16 -1 -1 -1 15 -1 -1 -1 15 -1 -1 -1 16 -1 -1 -1',
+        '15 -1 -1 -1 -1 -1 -1 -1 18 -1 -1 -1 -1 -1 -1 -1',
+        '16 -1 -1 -1 16 -1 -1 -1 16 -1 -1 -1 -1 -1 -1 -1',
+        '16 -1 -1 -1 16 -1 -1 -1 16 -1 -1 -1 -1 -1 -1 -1',
+        '16 -1 -1 -1 18 -1 -1 -1 14 -1 -1 -1 15 -1 -1 -1',
+        '16 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1',
+        '17 -1 -1 -1 17 -1 -1 -1 17 -1 -1 -1 17 -1 -1 -1',
+        '17 -1 -1 -1 16 -1 -1 -1 16 -1 -1 -1 16 -1 16 -1',
+        '18 -1 -1 -1 18 -1 -1 -1 17 -1 -1 -1 15 -1 -1 -1',
+        '14 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1'
       ]
     }
   };
@@ -4329,13 +4340,13 @@
     const convolver = c.createConvolver();
     convolver.buffer = music.impulse;
     const reverb = c.createGain();
-    reverb.gain.value = name === 'winter' ? 0.29 : 0.17;
+    reverb.gain.value = name === 'winter' ? 0.21 : 0.17;
     const delay = c.createDelay(2);
     delay.delayTime.value = 60 / score.bpm * 0.75;
     const feedback = c.createGain();
-    feedback.gain.value = name === 'winter' ? 0.33 : 0.22;
+    feedback.gain.value = name === 'winter' ? 0.24 : 0.22;
     const echo = c.createGain();
-    echo.gain.value = name === 'winter' ? 0.22 : 0.12;
+    echo.gain.value = name === 'winter' ? 0.14 : 0.12;
     input.connect(filter);
     filter.connect(output);
     input.connect(convolver);
@@ -4482,10 +4493,10 @@
     const step = 60 / score.bpm / 4;
     const bar = Math.floor(row / 16);
     const beat = row % 16;
-    const chord = score.chords[bar % 8];
+    const chord = score.chords[bar % score.chords.length];
     const bright = bus.name === 'spring';
     if (beat === 0) {
-      for (const [i, interval] of [0, 2, 4, 6].entries()) {
+      for (const [i, interval] of (score.padIntervals || [0, 2, 4, 6]).entries()) {
         musicNote(bus, musicDegree(score, chord + interval), time + i * 0.013,
           step * 14.7, 'pad', score.padLevel, (i - 1.5) * 0.28);
       }
@@ -4496,15 +4507,18 @@
     }
     const arpSpacing = bright ? 1 : 2;
     if (beat % arpSpacing === 0) {
-      const order = bus.name === 'winter' ? [0, 4, 2, 6, 4, 2, 6, 2] : [0, 2, 4, 6, 4, 2, 6, 4];
+      const order = bus.name === 'winter' ? [0, 2, 4, 7, 4, 2, 7, 4] : [0, 2, 4, 6, 4, 2, 6, 4];
       const degree = chord + 7 + order[(beat / arpSpacing) % 8];
       musicNote(bus, musicDegree(score, degree), time, step * 0.73,
         bus.name === 'winter' ? 'bell' : 'pluck', score.arpLevel, beat % 4 ? 0.42 : -0.42);
     }
-    let degree = score.melody[bar % 8][beat];
+    const pattern = score.melody[bar % score.melody.length];
+    let degree = pattern[beat];
     if (degree >= 0) {
-      if (bar >= 8 && bar < 12 && beat < 8) degree += bright ? 2 : 1;
-      const duration = step * (bright ? 0.95 : bus.name === 'winter' ? 3.4 : 2.65);
+      if (bus.name !== 'winter' && bar >= 8 && bar < 12 && beat < 8) degree += bright ? 2 : 1;
+      const nextNote = pattern.findIndex((note, index) => index > beat && note >= 0);
+      const winterLength = ((nextNote < 0 ? 16 : nextNote) - beat) * 0.85;
+      const duration = step * (bright ? 0.95 : bus.name === 'winter' ? winterLength : 2.65);
       musicNote(bus, musicDegree(score, degree), time, duration, score.lead, score.leadLevel, -0.08);
     }
     if (bright) {
@@ -4518,8 +4532,9 @@
     } else if (bus.name === 'autumn') {
       if (beat === 0 && bar % 2 === 0) musicDrum(bus, 'kick', time, 0.075);
       if (beat === 12) musicDrum(bus, 'snare', time, 0.018);
-    } else if (beat === 0 && bar % 4 === 0) {
-      musicDrum(bus, 'kick', time, 0.055);
+    } else if (bus.name === 'winter') {
+      if (beat === 0) musicDrum(bus, 'kick', time, 0.045);
+      if (beat % 2 === 0) musicDrum(bus, 'hat', time, beat % 4 ? 0.006 : 0.011);
     }
     bus.row = (row + 1) % 256;
     bus.nextTime += step;
