@@ -49,6 +49,46 @@
     image-rendering: pixelated;
   }
   canvas:focus { outline: none; }
+  canvas { touch-action: manipulation; }
+  .ui-toggle {
+    position: fixed;
+    top: max(12px, env(safe-area-inset-top));
+    right: max(12px, env(safe-area-inset-right));
+    z-index: 2;
+    width: 38px;
+    min-height: 38px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    background: var(--panel);
+    opacity: 0.7;
+  }
+  .ui-toggle[aria-pressed="true"] { opacity: 0.25; }
+  .ui-toggle:hover, .ui-toggle:focus-visible { opacity: 1; }
+  .view-icon { position: relative; width: 20px; height: 12px; border: 1px solid currentColor; border-radius: 50%; }
+  .view-icon::before {
+    content: "";
+    position: absolute;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    top: 2.5px;
+    left: 6.5px;
+  }
+  .ui-toggle[aria-pressed="true"] .view-icon::after {
+    content: "";
+    position: absolute;
+    width: 23px;
+    height: 1px;
+    background: currentColor;
+    left: -2px;
+    top: 5px;
+    transform: rotate(-35deg);
+  }
+  @media (pointer: coarse), (max-width: 680px) {
+    .ui-toggle { display: none; }
+  }
   .ui {
     position: absolute;
     inset: 0;
@@ -130,6 +170,7 @@
 <body>
 <main id="village">
   <canvas id="landscape" width="480" height="270" tabindex="-1" role="img" aria-label="Пиксельная лесная деревня с жителями, питомцами, лесными зверями, птицами, погодой и сменой суток"></canvas>
+  <button id="ui-toggle" class="ui-toggle" type="button" aria-label="Скрыть интерфейс" aria-pressed="false" aria-controls="interface" title="Скрыть интерфейс (H)"><span class="view-icon" aria-hidden="true"></span></button>
   <div class="ui" id="interface">
     <header class="scene-heading">
       <nav class="season-switch" aria-label="Время года">
@@ -216,6 +257,8 @@
   const cloudCanvas = makeCanvas(W, SKY_HEIGHT);
   const cloudContext = cloudCanvas.getContext('2d');
   const ui = byId('interface');
+  const interfaceToggle = byId('ui-toggle');
+  const touchInterface = window.matchMedia('(pointer: coarse), (max-width: 680px)');
   const clock = byId('time');
   const weatherPicker = byId('weather');
   const coverPicker = byId('cloud-cover');
@@ -3271,12 +3314,17 @@
     settingsToggle.setAttribute('aria-expanded', open);
   }
 
-  function toggleInterface() {
+  function toggleInterface(event) {
+    const cornerButton = event?.currentTarget === interfaceToggle;
     ui.hidden = !ui.hidden;
+    const label = ui.hidden ? 'Показать интерфейс' : 'Скрыть интерфейс';
+    interfaceToggle.setAttribute('aria-label', label);
+    interfaceToggle.setAttribute('aria-pressed', ui.hidden);
+    interfaceToggle.title = label + ' (H)';
     if (ui.hidden) {
       openSettings(false);
-      canvas.focus({ preventScroll: true });
-    } else {
+      if (!cornerButton) canvas.focus({ preventScroll: true });
+    } else if (!cornerButton) {
       settingsToggle.focus({ preventScroll: true });
     }
   }
@@ -3305,9 +3353,17 @@
 
   settingsToggle.addEventListener('click', () => openSettings(settings.hidden));
   byId('hide-ui').addEventListener('click', toggleInterface);
-  canvas.addEventListener('click', () => {
-    if (ui.hidden) toggleInterface();
-    else openSettings(false);
+  interfaceToggle.addEventListener('click', toggleInterface);
+  canvas.addEventListener('click', event => {
+    const bounds = canvas.getBoundingClientRect();
+    const x = (event.clientX - bounds.left) / bounds.width;
+    const y = (event.clientY - bounds.top) / bounds.height;
+    const centralTap = x >= 0.18 && x <= 0.82 && y >= 0.18 && y <= 0.82;
+    if ((touchInterface.matches && centralTap) || (!touchInterface.matches && ui.hidden)) {
+      toggleInterface();
+    } else if (!ui.hidden) {
+      openSettings(false);
+    }
   });
   pauseButton.addEventListener('click', togglePause);
 
