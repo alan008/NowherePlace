@@ -50,6 +50,7 @@
   }
   canvas:focus { outline: none; }
   canvas { touch-action: manipulation; }
+  canvas.hi-dpi { image-rendering: auto; }
   .ui-toggle {
     position: fixed;
     top: max(12px, env(safe-area-inset-top));
@@ -108,11 +109,17 @@
     box-shadow: 0 3px 0 #1018124d;
     border-radius: 4px;
   }
-  .season-switch {
+  .scene-switches {
     position: fixed;
     top: clamp(12px, 2.7vw, 36px);
     left: 50%;
     transform: translateX(-50%);
+    display: grid;
+    justify-items: center;
+    gap: 7px;
+    pointer-events: auto;
+  }
+  .season-switch, .style-switch {
     display: flex;
     gap: 2px;
     padding: 3px;
@@ -123,9 +130,12 @@
   }
   .season-switch button { min-height: 34px; padding-inline: 11px; border-color: transparent; background: transparent; font-size: 14px; }
   .season-switch button[aria-pressed="true"] { background: #415443; color: #ffe2a7; }
+  .style-switch { padding: 2px; background: #13221fd9; }
+  .style-switch button { min-height: 28px; padding: 0 13px; font-size: 12px; border: 0; background: transparent; color: #bbc8b7; }
+  .style-switch button[aria-pressed="true"] { background: #415443; color: #ffe2a7; }
   @media (max-width: 680px) {
     .scene-heading { flex-direction: column; align-items: flex-start; }
-    .season-switch { top: 12px; }
+    .scene-switches { top: 12px; gap: 5px; }
   }
   .controls { align-items: flex-end; }
   .control-side { position: relative; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
@@ -173,12 +183,18 @@
   <button id="ui-toggle" class="ui-toggle" type="button" aria-label="Скрыть интерфейс" aria-pressed="false" aria-controls="interface" title="Скрыть интерфейс (H)"><span class="view-icon" aria-hidden="true"></span></button>
   <div class="ui" id="interface">
     <header class="scene-heading">
+      <div class="scene-switches">
       <nav class="season-switch" aria-label="Время года">
         <button type="button" data-season="winter" aria-pressed="false">Зима</button>
         <button type="button" data-season="spring" aria-pressed="false">Весна</button>
         <button type="button" data-season="summer" aria-pressed="true">Лето</button>
         <button type="button" data-season="autumn" aria-pressed="false">Осень</button>
       </nav>
+      <nav class="style-switch" aria-label="Стиль графики">
+        <button type="button" data-render="pixel" aria-pressed="false">Old school</button>
+        <button type="button" data-render="hd" aria-pressed="true">Hi DPI</button>
+      </nav>
+      </div>
     </header>
     <div class="controls">
       <button id="regenerate" type="button">Новая деревня</button>
@@ -244,11 +260,25 @@
   const byId = id => document.getElementById(id);
   const canvas = byId('landscape');
   const ctx = canvas.getContext('2d', { alpha: false });
-  function makeCanvas(width = W, height = H) {
+  let renderMode = 'hd';
+  try { renderMode = localStorage.getItem('village-render') === 'pixel' ? 'pixel' : 'hd'; } catch {}
+  let renderScale = 1;
+  function prepareSurface(surface, width, height, scale = renderScale) {
+    surface.width = Math.ceil(width * scale);
+    surface.height = Math.ceil(height * scale);
+    surface.logicalWidth = width;
+    surface.logicalHeight = height;
+    const g = surface.getContext('2d');
+    g.setTransform(scale, 0, 0, scale, 0, 0);
+    g.imageSmoothingEnabled = renderMode === 'hd';
+    return surface;
+  }
+  function makeCanvas(width = W, height = H, scale = renderScale) {
     const layer = document.createElement('canvas');
-    layer.width = width;
-    layer.height = height;
-    return layer;
+    return prepareSurface(layer, width, height, scale);
+  }
+  function blit(g, source, x, y) {
+    g.drawImage(source, x, y, source.logicalWidth || source.width, source.logicalHeight || source.height);
   }
   const landCanvas = makeCanvas();
   const landContext = landCanvas.getContext('2d');
@@ -306,6 +336,12 @@
 
   // Integer scanlines keep the painted silhouettes crisp at the canvas resolution.
   function polygon(g, color, points) {
+    if (renderMode === 'hd') {
+      g.beginPath();
+      points.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y));
+      g.closePath(); g.fillStyle = color; g.fill();
+      return;
+    }
     const ys = points.map(point => point[1]);
     const first = Math.ceil(Math.min(...ys) - 0.5);
     const last = Math.ceil(Math.max(...ys) - 0.5);
@@ -330,10 +366,12 @@
 
   function pixels(g, color, x, y, width = 1, height = 1) {
     g.fillStyle = color;
+    if (renderMode === 'hd') { g.fillRect(x, y, width, height); return; }
     g.fillRect(Math.round(x), Math.round(y), Math.round(width), Math.round(height));
   }
 
   function ellipse(g, color, cx, cy, rx, ry) {
+    if (renderMode === 'hd') { hdOval(g, color, cx, cy, rx, ry); return; }
     g.fillStyle = color;
     const top = Math.ceil(cy - ry);
     const bottom = Math.floor(cy + ry);
@@ -346,6 +384,7 @@
   }
 
   function trace(g, color, x0, y0, x1, y1, width = 1) {
+    if (renderMode === 'hd') { hdLine(g, color, [[x0, y0], [x1, y1]], width); return; }
     let x = Math.round(x0);
     let y = Math.round(y0);
     const endX = Math.round(x1);
@@ -865,7 +904,7 @@
   }
 
   function cloudTexture(paint, speed) {
-    const canvas = makeCanvas(CLOUD_TILE, SKY_HEIGHT);
+    const canvas = makeCanvas(CLOUD_TILE, SKY_HEIGHT, 1);
     const g = canvas.getContext('2d');
     const image = g.createImageData(CLOUD_TILE, SKY_HEIGHT);
     const opacity = new Uint8Array(CLOUD_TILE * SKY_HEIGHT);
@@ -941,7 +980,7 @@
     }
   }
 
-  function generateCloudLayers(code) {
+  function generateCloudLayersPixel(code) {
     const random = randomFrom(hash(code + '/небо'));
     const billow = tiledNoise(random, 10, 5);
     const streak = tiledNoise(random, 17, 12);
@@ -976,6 +1015,7 @@
   }
 
   function drawDistantLand(g, world, palette) {
+    if (renderMode === 'hd') return drawDistantLandHD(g, world, palette);
     for (let i = 0; i < world.hills.length; i++) {
       const ridge = world.hills[i];
       polygon(g, palette.hills[i], [...ridge, [W + 35, 169], [-35, 169]]);
@@ -1013,6 +1053,7 @@
   }
 
   function drawMeadow(g, world, palette) {
+    if (renderMode === 'hd') return drawMeadowHD(g, world, palette);
     const { fringe, paths, gardens } = world;
     const random = randomFrom(world.texture);
     const meadowEdge = Array.from({ length: 121 }, (_, i) => [i * 4, Math.round(fringe(i * 4))]);
@@ -1436,6 +1477,7 @@
   }
 
   function drawProp(g, item, palette, contact = true) {
+    if (renderMode === 'hd') return drawPropHD(g, item, palette, contact);
     switch (item.kind) {
       case 'pine': drawPine(g, item, palette, contact); break;
       case 'festivalTree': drawPine(g, item, palette, contact); break;
@@ -1627,18 +1669,23 @@
       const strength = garlandBrightness(bulb, motion);
       const glow = tree.glows[bulb.color];
       g.globalAlpha = strength * (0.32 + darkness * 0.68);
-      g.drawImage(glow, bulb.x - 6, bulb.y - 6);
+      blit(g, glow, bulb.x - 6, bulb.y - 6);
       g.globalAlpha = 0.25 + strength * 0.75;
-      pixels(g, festiveColors[bulb.color], bulb.x, bulb.y, strength > 0.78 ? 2 : 1);
-      if (strength > 0.82) pixels(g, '#fff3ce', bulb.x, bulb.y);
+      if (renderMode === 'hd') {
+        hdOval(g, festiveColors[bulb.color], bulb.x, bulb.y, strength > 0.78 ? 0.7 : 0.45, 0.65);
+        if (strength > 0.82) hdOval(g, '#fff3ce', bulb.x - 0.1, bulb.y - 0.1, 0.2, 0.25);
+      } else {
+        pixels(g, festiveColors[bulb.color], bulb.x, bulb.y, strength > 0.78 ? 2 : 1);
+        if (strength > 0.82) pixels(g, '#fff3ce', bulb.x, bulb.y);
+      }
     }
     g.globalAlpha = 0.7 + Math.sin(motion * 1.3) * 0.1;
     drawTreeStar(g, tree, '#ffe7a2');
     g.globalAlpha = 0.6 * darkness;
-    g.drawImage(tree.glows[3], tree.x + tree.bend - 6, tree.y - tree.height - 8);
+    blit(g, tree.glows[3], tree.x + tree.bend - 6, tree.y - tree.height - 8);
     g.globalAlpha = 1;
     maskForeground(g, world, actors, tree.y, motion);
-    landContext.drawImage(festivalCanvas, 0, 0);
+    blit(landContext, festivalCanvas, 0, 0);
   }
 
   function buildForegroundMasks(world, sprites) {
@@ -1648,7 +1695,7 @@
       const mask = makeCanvas();
       const g = mask.getContext('2d');
       for (const sprite of sprites) {
-        if (sprite.y > depth) g.drawImage(sprite.canvas, sprite.left, sprite.top);
+        if (sprite.y > depth) blit(g, sprite.canvas, sprite.left, sprite.top);
       }
       return [depth, mask];
     }));
@@ -1656,7 +1703,7 @@
 
   function maskForeground(g, world, actors, depth, motion) {
     g.globalCompositeOperation = 'destination-out';
-    g.drawImage(world.foregroundMasks.get(depth), 0, 0);
+    blit(g, world.foregroundMasks.get(depth), 0, 0);
     for (const actor of actors) {
       if (actor.y > depth) drawGroundActor(g, actor, motion);
     }
@@ -1712,7 +1759,7 @@
       drawProp(shape, item, seasonalColors.night, false);
       for (const [i, out] of outputs.entries()) {
         out.globalCompositeOperation = 'destination-out';
-        out.drawImage(silhouette, 0, 0);
+        blit(out, silhouette, 0, 0);
         out.globalCompositeOperation = 'source-over';
         if (!house && !tree) continue;
         const side = i === 0 ? -1 : 1;
@@ -1749,9 +1796,9 @@
           g.restore();
         }
         g.globalCompositeOperation = 'destination-in';
-        g.drawImage(silhouette, 0, 0);
+        blit(g, silhouette, 0, 0);
         g.globalCompositeOperation = 'source-over';
-        out.drawImage(highlight, 0, 0);
+        blit(out, highlight, 0, 0);
       }
     }
     return masks;
@@ -1800,7 +1847,8 @@
     for (const [index, weight] of [[low, 1 - blend], [high, blend]]) {
       if (index === 0 || weight < 0.001) continue;
       const layer = world.cloudLayers[index];
-      const offset = Math.floor(wrap(motion * layer.speed, CLOUD_TILE));
+      const drift = wrap(motion * layer.speed, CLOUD_TILE);
+      const offset = renderMode === 'hd' ? drift : Math.floor(drift);
       visible.push({ layer, offset, weight });
     }
     return { visible, coverage: mix(cloudAreas[low], cloudAreas[high], blend) };
@@ -1810,7 +1858,7 @@
     let obscured = 0;
     for (const { layer, offset, weight } of clouds.visible) {
       const row = clamp(Math.round(y), 0, SKY_HEIGHT - 1) * CLOUD_TILE;
-      obscured += layer.opacity[row + wrap(Math.round(x) + offset, CLOUD_TILE)] * weight / 255;
+      obscured += layer.opacity[row + wrap(Math.round(x + offset), CLOUD_TILE)] * weight / 255;
     }
     return 1 - clamp(obscured);
   }
@@ -1845,8 +1893,8 @@
     const active = progress >= 0 && progress <= 1;
     const arc = clamp(progress);
     const elevation = active ? Math.sin(arc * Math.PI) : 0;
-    const x = Math.round(mix(397 + Math.sin(world.sway) * 14, 70, arc));
-    const y = Math.round(113 - elevation * 91);
+    const x = renderCoordinate(mix(397 + Math.sin(world.sway) * 14, 70, arc));
+    const y = renderCoordinate(113 - elevation * 91);
     const gap = active ? lightThroughClouds(clouds, x, y, 6) : 0;
     const aboveRidge = active ? lightAboveRidge(world, x, y) : 0;
     const air = 1 - weather.fog * 0.47 - weather.rain * 0.11;
@@ -1861,13 +1909,15 @@
     const visible = orbit <= 1 && darkness > 0;
     const arc = clamp(orbit);
     const elevation = Math.sin(arc * Math.PI);
-    const x = Math.round(mix(391, 102, arc));
-    const y = Math.round(111 - elevation * 83);
+    const x = renderCoordinate(mix(391, 102, arc));
+    const y = renderCoordinate(111 - elevation * 83);
     const brightness = visible ? darkness * (1 - weather.fog * 0.55 - weather.rain * 0.20) : 0;
     const gap = visible ? lightThroughClouds(clouds, x, y, 4) : 0;
     const direct = brightness * gap ** 1.4 * (visible ? lightAboveRidge(world, x, y) : 0);
     return { x, y, darkness, brightness, direct, right: smooth((x - W * 0.22) / (W * 0.56)) };
   }
+
+  const renderCoordinate = value => renderMode === 'hd' ? value : Math.round(value);
 
   const translucent = (values, alpha) => 'rgba(' + values.join(',') + ',' + clamp(alpha) + ')';
 
@@ -1877,8 +1927,8 @@
     cloudContext.globalCompositeOperation = 'lighter';
     for (const { layer, offset, weight } of clouds.visible) {
       cloudContext.globalAlpha = weight;
-      cloudContext.drawImage(layer.canvas, -offset, 0);
-      if (offset + W > CLOUD_TILE) cloudContext.drawImage(layer.canvas, CLOUD_TILE - offset, 0);
+      blit(cloudContext, layer.canvas, -offset, 0);
+      if (offset + W > CLOUD_TILE) blit(cloudContext, layer.canvas, CLOUD_TILE - offset, 0);
     }
     const top = blendRgb([224, 234, 237], [39, 49, 74], darkness);
     const bottom = blendRgb([182, 191, 198], [45, 56, 77], darkness);
@@ -1894,7 +1944,7 @@
     cloudContext.fillRect(0, 0, W, SKY_HEIGHT);
     cloudContext.globalAlpha = 1;
     cloudContext.globalCompositeOperation = 'source-over';
-    ctx.drawImage(cloudCanvas, 0, 0);
+    blit(ctx, cloudCanvas, 0, 0);
   }
 
   function drawCrescent(x, y) {
@@ -1908,6 +1958,7 @@
   }
 
   function drawSky(world, light, motion, weather, clouds, sun, moon) {
+    if (renderMode === 'hd') return drawSkyHD(world, light, motion, weather, clouds, sun, moon);
     const a = seasonalColors[light.from];
     const b = seasonalColors[light.to];
     const cloudyTint = [75, 93, 115];
@@ -1977,10 +2028,10 @@
   }
 
   function drawLandLayer(layers, light, part) {
-    landContext.drawImage(layers[light.from][part], 0, 0);
+    blit(landContext, layers[light.from][part], 0, 0);
     if (light.from !== light.to && light.blend > 0) {
       landContext.globalAlpha = light.blend;
-      landContext.drawImage(layers[light.to][part], 0, 0);
+      blit(landContext, layers[light.to][part], 0, 0);
       landContext.globalAlpha = 1;
     }
   }
@@ -2053,12 +2104,12 @@
     const shadow = sun.direct * (0.54 + (1 - sun.elevation) * 0.19);
     const soft = mix(0.72, 1.85, 1 - sun.gap);
     landContext.save();
-    landContext.filter = 'blur(' + soft + 'px)';
+    landContext.filter = 'blur(' + soft * (renderMode === 'hd' ? renderScale : 1) + 'px)';
     landContext.globalAlpha = shadow * 0.4;
-    landContext.drawImage(shadowCanvas, 0, 0);
+    blit(landContext, shadowCanvas, 0, 0);
     landContext.restore();
     landContext.globalAlpha = shadow * mix(0.41, 0.83, sun.gap);
-    landContext.drawImage(shadowCanvas, 0, 0);
+    blit(landContext, shadowCanvas, 0, 0);
     landContext.globalAlpha = 1;
   }
 
@@ -2110,11 +2161,11 @@
       while (nextActor < actors.length && actors[nextActor].y <= sprite.y) {
         drawGroundActor(landContext, actors[nextActor++], motion);
       }
-      landContext.drawImage(sprite.canvas, sprite.left, sprite.top);
+      blit(landContext, sprite.canvas, sprite.left, sprite.top);
       if (light.from !== light.to && light.blend > 0) {
         const other = layers[light.to].sprites[i];
         landContext.globalAlpha = light.blend;
-        landContext.drawImage(other.canvas, other.left, other.top);
+        blit(landContext, other.canvas, other.left, other.top);
         landContext.globalAlpha = 1;
       }
     }
@@ -2123,9 +2174,9 @@
     if (moon.direct > 0.005) {
       const tint = moon.direct * 0.84;
       landContext.globalAlpha = tint * (1 - moon.right);
-      landContext.drawImage(world.moonMasks[0], 0, 0);
+      blit(landContext, world.moonMasks[0], 0, 0);
       landContext.globalAlpha = tint * moon.right;
-      landContext.drawImage(world.moonMasks[1], 0, 0);
+      blit(landContext, world.moonMasks[1], 0, 0);
       landContext.globalAlpha = 1;
     }
     if (season === 'winter') drawFestivalLights(world, actors, motion, moon.darkness);
@@ -2142,7 +2193,7 @@
       landContext.fillRect(hearth.x - 33, hearth.y - 36, 66, 66);
       landContext.globalCompositeOperation = 'source-over';
     }
-    ctx.drawImage(landCanvas, 0, 0);
+    blit(ctx, landCanvas, 0, 0);
     drawChimneySmoke(world, motion, hour);
 
     if (weather.fog > 0.02) {
@@ -2172,7 +2223,9 @@
       windowLightContext.save();
       windowLightContext.translate(house.x, house.y);
       windowLightContext.scale(house.face, 1);
-      for (const { x, y, w, h } of houseWindows(house, d)) {
+      for (const window of houseWindows(house, d)) {
+        if (renderMode === 'hd') { drawLitWindowHD(windowLightContext, window, strength); continue; }
+        const {x, y, w, h} = window;
         windowLightContext.globalAlpha = strength * 0.17;
         ellipse(windowLightContext, '#efa849', x + w / 2, y + h / 2, w + 3, h + 3);
         windowLightContext.globalAlpha = strength;
@@ -2184,7 +2237,7 @@
       windowLightContext.restore();
       windowLightContext.globalAlpha = 1;
       maskForeground(windowLightContext, world, actors, house.y, motion);
-      ctx.drawImage(windowLightCanvas, 0, 0);
+      blit(ctx, windowLightCanvas, 0, 0);
     }
 
     if (weather.rain > 0.02) {
@@ -2192,6 +2245,7 @@
         drawSnowfall(world, motion, weather.rain, moon.darkness);
         return;
       }
+      if (renderMode === 'hd') { drawRainHD(world, motion, weather.rain); return; }
       for (const drop of world.atmosphere.drops) {
         const travel = motion * drop.speed;
         const x = Math.round(wrap(drop.x - travel * 0.36, W + 80) - 35);
@@ -2240,6 +2294,7 @@
   }
 
   function drawSnowfall(world, motion, intensity, darkness) {
+    if (renderMode === 'hd') return drawSnowfallHD(world, motion, intensity, darkness);
     const wind = Math.sin(motion * 0.16) * 13 + Math.sin(motion * 0.057) * 9;
     for (const [i, flake] of world.seasonEffects.snow.entries()) {
       if (i / world.seasonEffects.snow.length > intensity) continue;
@@ -2281,6 +2336,7 @@
 
   function drawFootprints(g, world, motion) {
     if (season !== 'winter') return;
+    if (renderMode === 'hd') return drawFootprintsHD(g, world, motion);
     const lifetime = 115 / (1 + weather.rain * 2.2);
     for (const mark of world.seasonEffects.footprints) {
       const fade = 1 - (motion - mark.born) / lifetime;
@@ -2667,6 +2723,7 @@
   }
 
   function drawGroundActor(g, actor, motion) {
+    if (renderMode === 'hd') return drawGroundActorHD(g, actor, motion);
     if (actor.alpha < 0.01) return;
     if (actor.kind === 'leafParticle') {
       g.globalAlpha = actor.alpha;
@@ -2781,6 +2838,7 @@
   }
 
   function drawCampfire(g, fire, motion) {
+    if (renderMode === 'hd') return drawCampfireHD(g, fire, motion);
     const { x, y, flame, embers } = fire;
     ellipse(g, '#303434', x, y, 6, 2);
     for (const [dx, dy] of [[-5, 0], [-3, 2], [1, 2], [5, 0], [2, -2], [-2, -2]]) {
@@ -2892,6 +2950,7 @@
   }
 
   function drawFlyingBird(g, species, colors, wing, bank) {
+    if (renderMode === 'hd') return drawFlyingBirdHD(g, species, colors, wing, bank);
     const stork = species === 'stork';
     const small = species === 'tit' || species === 'sparrow';
     const owl = flyingSpecies[species].night;
@@ -2936,6 +2995,7 @@
   }
 
   function drawBat(g, colors, wing, bank) {
+    if (renderMode === 'hd') return drawBatHD(g, colors, wing, bank);
     const lift = wing * 4.8;
     for (const side of [-1, 1]) {
       const tilt = bank * side * 2;
@@ -2970,7 +3030,7 @@
         const wing = glide ? 0.15 + Math.sin(motion * 1.1 + member.phase) * 0.15 : Math.sin(beat);
         g.save();
         g.globalAlpha = presence * (1 - weather.rain * 0.27);
-        g.translate(Math.round(pose.x), Math.round(pose.y));
+        g.translate(renderMode === 'hd' ? pose.x : Math.round(pose.x), renderMode === 'hd' ? pose.y : Math.round(pose.y));
         g.scale(pose.direction * pose.scale, pose.scale);
         if (flock.species === 'bat') drawBat(g, shades, wing, pose.bank);
         else drawFlyingBird(g, flock.species, shades, wing, pose.bank);
@@ -2978,12 +3038,1083 @@
           const blink = wrap(motion + member.eyeOffset, member.eyePeriod);
           if (blink < 0.14 || (blink > 0.31 && blink < 0.39)) {
             g.globalAlpha = presence * 0.85;
-            pixels(g, flock.species === 'eagleOwl' ? '#e9a459' : '#ebd399', 3, -1);
+            if (renderMode === 'hd') hdOval(g, flock.species === 'eagleOwl' ? '#e9a459' : '#ebd399', 3.3, -0.55, 0.28, 0.35);
+            else pixels(g, flock.species === 'eagleOwl' ? '#e9a459' : '#ebd399', 3, -1);
           }
         }
         g.restore();
       }
     }
+  }
+
+  // Hi DPI artwork uses the same 480 x 270 world, with curves rasterized at display resolution.
+  function hdPath(g, fill, paint, stroke, width = 0.5) {
+    g.beginPath(); paint(g);
+    if (fill) { g.fillStyle = fill; g.fill(); }
+    if (stroke) { g.strokeStyle = stroke; g.lineWidth = width; g.lineJoin = 'round'; g.lineCap = 'round'; g.stroke(); }
+  }
+
+  function hdOval(g, color, x, y, rx, ry) {
+    if (rx <= 0 || ry <= 0) return;
+    hdPath(g, color, p => p.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2));
+  }
+
+  function hdLine(g, color, points, width = 0.5) {
+    if (!points.length) return;
+    hdPath(g, null, p => { p.moveTo(...points[0]); for (const point of points.slice(1)) p.lineTo(...point); }, color, width);
+  }
+
+  function hdGradient(g, x0, y0, x1, y1, shades) {
+    const gradient = g.createLinearGradient(x0, y0, x1, y1);
+    shades.forEach((color, i) => gradient.addColorStop(i / (shades.length - 1), color));
+    return gradient;
+  }
+
+  function hdRound(g, fill, x, y, w, h, radius = 0.7, stroke, lineWidth = 0.4) {
+    const r = Math.max(0, Math.min(radius, w / 2, h / 2));
+    hdPath(g, fill, p => {
+      p.moveTo(x + r, y); p.lineTo(x + w - r, y); p.quadraticCurveTo(x + w, y, x + w, y + r);
+      p.lineTo(x + w, y + h - r); p.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      p.lineTo(x + r, y + h); p.quadraticCurveTo(x, y + h, x, y + h - r);
+      p.lineTo(x, y + r); p.quadraticCurveTo(x, y, x + r, y); p.closePath();
+    }, stroke, lineWidth);
+  }
+
+  function hdSmooth(p, points) {
+    p.moveTo(...points[0]);
+    for (let i = 1; i < points.length - 1; i++) {
+      p.quadraticCurveTo(...points[i], (points[i][0] + points[i + 1][0]) / 2, (points[i][1] + points[i + 1][1]) / 2);
+    }
+    p.lineTo(...points[points.length - 1]);
+  }
+
+  function hdShadow(g, palette, x, y, rx, ry) {
+    g.save();
+    for (let i = 3; i >= 0; i--) {
+      g.globalAlpha *= 0.43;
+      hdOval(g, palette.shadow, x + rx * 0.18, y, rx * (1 + i * 0.13), Math.max(0.35, ry * (1 + i * 0.23)));
+    }
+    g.restore();
+  }
+
+  function drawDistantLandHD(g, world, palette) {
+    g.save();
+    world.hills.forEach((ridge, i) => {
+      const gradient = hdGradient(g, 0, 73 + i * 10, 0, 174, [palette.hills[i], palette.mist]);
+      hdPath(g, gradient, p => { hdSmooth(p, ridge); p.lineTo(W + 35, 173); p.lineTo(-35, 173); p.closePath(); });
+      g.globalAlpha = 0.14;
+      for (let k = 7; k < ridge.length - 10; k += 13) {
+        const [x, y] = ridge[k];
+        hdPath(g, palette.hills[Math.max(0, i - 1)], p => {
+          p.moveTo(x, y + 0.5); p.bezierCurveTo(x + 8, y + 7, x + 13, y + 16, x + 32, y + 25);
+          p.quadraticCurveTo(x + 10, y + 16, x - 8, y + 17); p.closePath();
+        });
+      }
+      g.globalAlpha = 1;
+    });
+    for (const tree of world.farTrees) {
+      const { x, y, width: w, height: h, layer } = tree;
+      const shade = palette.forest[layer];
+      hdPath(g, shade, p => {
+        p.moveTo(x, y - h); p.quadraticCurveTo(x + w * 0.15, y - h * 0.55, x + w * 0.6, y - h * 0.4);
+        p.lineTo(x + w * 0.32, y - h * 0.42); p.quadraticCurveTo(x + w * 0.6, y - h * 0.12, x + w, y);
+        p.quadraticCurveTo(x, y + 1, x - w, y); p.quadraticCurveTo(x - w * 0.48, y - h * 0.2, x - w * 0.35, y - h * 0.42);
+        p.lineTo(x - w * 0.6, y - h * 0.4); p.quadraticCurveTo(x - w * 0.12, y - h * 0.65, x, y - h); p.closePath();
+      });
+      if (palette.season === 'winter') {
+        g.globalAlpha = 0.45;
+        hdLine(g, palette.snow[1], [[x, y - h + 0.7], [x - w * 0.32, y - h * 0.44]], 0.5);
+        g.globalAlpha = 1;
+      }
+    }
+    g.globalAlpha = 0.28;
+    const mist = hdGradient(g, 0, 117, 0, 157, [palette.mist, 'transparent']);
+    g.fillStyle = mist; g.fillRect(0, 117, W, 40);
+    g.restore();
+  }
+
+  function drawMeadowHD(g, world, palette) {
+    const random = randomFrom(world.texture);
+    const winter = palette.season === 'winter';
+    const edge = Array.from({ length: 81 }, (_, i) => [i * 6, world.fringe(i * 6)]);
+    g.save();
+    const ground = hdGradient(g, 0, 137, W * 0.2, H, [palette.grass[2], palette.grass[0], palette.grass[1]]);
+    hdPath(g, ground, p => { hdSmooth(p, edge); p.lineTo(W, H); p.lineTo(0, H); p.closePath(); });
+    g.save();
+    hdPath(g, null, p => { hdSmooth(p, edge); p.lineTo(W, H); p.lineTo(0, H); p.closePath(); }); g.clip();
+    for (let i = 0; i < 100; i++) {
+      const x = between(random, -30, W + 30), y = between(random, 145, H + 8);
+      g.globalAlpha = between(random, 0.035, 0.12);
+      hdOval(g, pick(random, palette.grass), x, y, between(random, 10, 65), between(random, 1.5, 7));
+    }
+    g.globalAlpha = 1;
+    for (const route of world.paths.routes) {
+      const points = route.filter((_, i) => i % 3 === 0 || i === route.length - 1).map(p => [p.x, p.y]);
+      for (const [padding, color] of [[1.1, palette.path[3]], [0, palette.path[1]]]) {
+        g.strokeStyle = color; g.lineCap = 'round'; g.lineJoin = 'round';
+        for (let i = 1; i < points.length; i++) {
+          const a = points[i - 1], b = points[i], c = points[Math.min(i + 1, points.length - 1)];
+          const start = i === 1 ? a : [(points[i - 2][0] + a[0]) / 2, (points[i - 2][1] + a[1]) / 2];
+          g.lineWidth = mix(1.3, 3.3, clamp((a[1] - 150) / 120)) + padding;
+          hdPath(g, null, p => { p.moveTo(...start); p.quadraticCurveTo(...a, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2); }, color, g.lineWidth);
+          if (i === points.length - 1) hdLine(g, color, [[(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], c], g.lineWidth);
+        }
+      }
+    }
+    for (const garden of world.gardens) {
+      const {left: x, top: y, right, bottom} = garden;
+      hdRound(g, winter ? palette.snow[1] : palette.path[0], x + 1, y + 1, right - x - 2, bottom - y - 2, 1.2);
+      const plants = randomFrom(garden.seed);
+      for (let row = y + 3; row < bottom - 1; row += 3.3) {
+        hdLine(g, winter ? palette.snow[0] : palette.wood[0], [[x + 3, row], [right - 3, row]], winter ? 0.6 : 1);
+        if (winter) continue;
+        for (let col = x + 4; col < right - 2; col += 3) {
+          const h = palette.season === 'spring' ? 0.65 : 1.25;
+          hdOval(g, palette.leaf[0], col, row, 1.2, 0.45);
+          hdOval(g, palette.leaf[2], col - 0.4, row - h, 0.8, h * 0.75);
+          hdOval(g, palette.leaf[3], col + 0.4, row - h * 0.8, 0.75, h * 0.7);
+          if (plants() > 0.65 && palette.season === 'summer') hdOval(g, palette.flowers[0], col, row - h * 1.3, 0.4, 0.4);
+        }
+      }
+    }
+    for (let i = 0; i < 2200; i++) {
+      const x = between(random, 0, W), y = between(random, 143, H);
+      if (y < world.fringe(x) + 1 || world.gardens.some(a => x > a.left && x < a.right && y > a.top && y < a.bottom)) continue;
+      const depth = clamp((y - 141) / 129), path = world.paths.mask[Math.floor(y) * W + Math.floor(x)];
+      if (path) {
+        g.globalAlpha = 0.42;
+        hdOval(g, pick(random, palette.path), x, y, between(random, 0.18, 0.5), between(random, 0.1, 0.23));
+      } else if (winter) {
+        g.globalAlpha = between(random, 0.12, 0.45);
+        hdOval(g, pick(random, palette.snow), x, y, 0.1 + depth * random() * 0.7, 0.1 + depth * 0.17);
+      } else {
+        g.globalAlpha = between(random, 0.3, 0.65);
+        const h = (0.35 + random() * 1.8) * depth;
+        hdPath(g, null, p => { p.moveTo(x, y); p.quadraticCurveTo(x + h * 0.6, y - h * 0.6, x - h * 0.15, y - h); }, pick(random, palette.grass.slice(2)), 0.2 + depth * 0.2);
+        if (i % 13 === 0 && depth > 0.3) {
+          const color = pick(random, palette.flowers);
+          for (let petal = 0; petal < 5; petal++) {
+            const a = petal / 5 * Math.PI * 2;
+            hdOval(g, color, x + Math.cos(a) * 0.43, y - h + Math.sin(a) * 0.3, 0.32, 0.22);
+          }
+          hdOval(g, palette.wood[5], x, y - h, 0.17, 0.16);
+        }
+      }
+    }
+    if (palette.season === 'autumn') {
+      g.globalAlpha = 0.8;
+      for (const tree of world.items.filter(item => item.kind === 'leaf')) {
+        const leaves = randomFrom(tree.seed), shades = treeLeafColors(tree, palette);
+        for (let i = 0; i < tree.height * 1.4; i++) {
+          const x = tree.x + (leaves() - leaves()) * tree.width;
+          const y = tree.y + (leaves() - leaves()) * tree.width * 0.2;
+          hdOval(g, pick(leaves, shades.slice(1)), x, y, between(leaves, 0.3, 0.9), 0.25);
+        }
+      }
+    }
+    g.restore(); g.restore();
+  }
+
+  function drawPineHD(g, item, palette, contact = true) {
+    const {x, y, height: h} = item, random = randomFrom(item.seed), half = item.width * 0.5;
+    const bend = integer(random, -Math.ceil(half * 0.25), Math.ceil(half * 0.25));
+    const count = h > 44 ? 6 : h > 23 ? 5 : 4, shades = palette.pine;
+    g.save();
+    if (contact) hdShadow(g, palette, x, y, half * 0.95, h * 0.04);
+    hdPath(g, hdGradient(g, x - 1, y, x + 2, y, [palette.wood[1], palette.wood[3], palette.wood[0]]), p => {
+      p.moveTo(x - h * 0.025, y); p.quadraticCurveTo(x - 1, y - h * 0.4, x + bend * 0.3, y - h * 0.6);
+      p.lineTo(x + h * 0.028, y - h * 0.2); p.lineTo(x + h * 0.035, y); p.closePath();
+    });
+    for (let i = count - 1; i >= 0; i--) {
+      const {x: cx, top, bottom: base, span} = pineTier(item, i, count, bend);
+      const left = cx - span * between(random, 0.8, 1.06), right = cx + span * between(random, 0.9, 1.13);
+      const grad = hdGradient(g, left, top, right, base, [shades[3], shades[item.tint === 2 ? 2 : 1], shades[0]]);
+      hdPath(g, grad, p => {
+        p.moveTo(cx, top); p.bezierCurveTo(cx + span * 0.08, top + h * 0.1, right - span * 0.4, base - h * 0.055, right, base);
+        p.quadraticCurveTo(right - span * 0.1, base + h * 0.012, right - span * 0.26, base - h * 0.01);
+        p.quadraticCurveTo(right - span * 0.28, base + h * 0.035, right - span * 0.55, base + h * 0.006);
+        p.quadraticCurveTo(cx, base + h * 0.04, left + span * 0.27, base + h * 0.018);
+        p.quadraticCurveTo(left + span * 0.29, base + h * 0.004, left, base + h * 0.01);
+        p.bezierCurveTo(left + span * 0.47, base - h * 0.07, cx - span * 0.12, top + h * 0.12, cx, top); p.closePath();
+      });
+      g.globalAlpha = 0.32;
+      for (let twig = 0; twig < Math.max(3, span * 1.1); twig++) {
+        const t = between(random, 0.28, 0.95), side = random() < 0.5 ? -1 : 1;
+        const py = mix(top, base, t), sx = cx + side * span * t * between(random, 0.2, 0.7);
+        hdPath(g, null, p => { p.moveTo(sx - side * span * 0.11, py - h * 0.02); p.quadraticCurveTo(sx, py, sx + side * span * 0.09, py - h * 0.008); }, shades[3], Math.max(0.22, h * 0.004));
+      }
+      g.globalAlpha = 1;
+    }
+    g.restore();
+  }
+
+  function drawLeafTreeHD(g, item, palette, contact = true) {
+    if (palette.season === 'winter') return drawBareTreeHD(g, item, palette, contact);
+    const {x, y, height: h} = item, half = item.width * 0.66, cy = y - h * 0.62;
+    const random = randomFrom(item.seed), shades = treeLeafColors(item, palette);
+    g.save();
+    if (contact) hdShadow(g, palette, x, y, half, h * 0.05);
+    hdPath(g, hdGradient(g, x - h * 0.04, y, x + h * 0.04, y, [palette.wood[0], palette.wood[3], palette.wood[1]]), p => {
+      p.moveTo(x - h * 0.05, y); p.quadraticCurveTo(x - h * 0.02, y - h * 0.22, x - h * 0.04, cy);
+      p.lineTo(x + h * 0.015, cy); p.quadraticCurveTo(x + h * 0.005, y - h * 0.3, x + h * 0.055, y); p.closePath();
+    });
+    for (const side of [-1, 1]) hdPath(g, null, p => {
+      p.moveTo(x, y - h * 0.28); p.quadraticCurveTo(x + side * half * 0.18, cy + h * 0.12, x + side * half * 0.65, cy);
+    }, palette.wood[1], h * 0.025);
+    const canopy = g.createRadialGradient(x - half * 0.3, cy - h * 0.12, 0, x, cy, half * 1.3);
+    canopy.addColorStop(0, shades[3]); canopy.addColorStop(0.7, shades[1]); canopy.addColorStop(1, shades[0]);
+    hdOval(g, canopy, x, cy, half, h * 0.31);
+    for (let i = 0; i < 16; i++) {
+      const angle = i * 2.399 + between(random, -0.3, 0.3);
+      const radius = between(random, 0.25, 0.44) * half;
+      const px = x + Math.cos(angle) * half * between(random, 0.15, 0.8);
+      const py = cy + Math.sin(angle) * h * between(random, 0.07, 0.2);
+      const bright = py < cy + 1;
+      const gradient = g.createRadialGradient(px - radius * 0.4, py - radius * 0.4, 0, px, py, radius * 1.15);
+      gradient.addColorStop(0, shades[bright ? 4 : 2]); gradient.addColorStop(0.7, shades[bright ? 2 : 1]); gradient.addColorStop(1, shades[bright ? 1 : 0]);
+      hdOval(g, gradient, px, py, radius, radius * 0.85);
+      for (let leaf = 0; leaf < 7; leaf++) {
+        const lx = px + between(random, -0.7, 0.7) * radius, ly = py + between(random, -0.55, 0.4) * radius;
+        g.globalAlpha = 0.65;
+        hdOval(g, shades[bright ? 4 : 3], lx, ly, radius * between(random, 0.06, 0.16), radius * 0.07);
+        if (palette.season === 'spring' && item.seed % 4 === 0) {
+          hdOval(g, palette.flowers[i % 3], lx, ly, h * 0.012, h * 0.011);
+        }
+        g.globalAlpha = 1;
+      }
+    }
+    g.restore();
+  }
+
+  function drawBareTreeHD(g, item, palette, contact = true) {
+    const {x, y, height: h} = item, random = randomFrom(item.seed), wood = palette.wood;
+    g.save();
+    if (contact) hdShadow(g, palette, x, y, item.width * 0.55, h * 0.04);
+    hdPath(g, null, p => { p.moveTo(x, y); p.bezierCurveTo(x - h * 0.03, y - h * 0.3, x + h * 0.01, y - h * 0.63, x - h * 0.04, y - h * 0.92); }, wood[1], Math.max(0.6, h * 0.05));
+    hdPath(g, null, p => { p.moveTo(x - h * 0.015, y); p.quadraticCurveTo(x - h * 0.06, y - h * 0.5, x - h * 0.055, y - h * 0.89); }, wood[3], Math.max(0.25, h * 0.012));
+    for (let i = 0; i < 9; i++) {
+      const side = i % 2 ? 1 : -1, sy = y - h * (0.22 + i * 0.077);
+      const span = item.width * between(random, 0.27, 0.6) * (1 - i * 0.05);
+      const ex = x + side * span, ey = sy - h * between(random, 0.13, 0.23);
+      const points = [[x, sy], [x + side * span * 0.6, sy - h * 0.05], [ex, ey]];
+      hdPath(g, null, p => { p.moveTo(...points[0]); p.quadraticCurveTo(...points[1], ...points[2]); }, wood[1], Math.max(0.35, h * 0.018 * (1 - i * 0.055)));
+      hdPath(g, null, p => { p.moveTo(ex, ey); p.quadraticCurveTo(ex + side * span * 0.1, ey - h * 0.05, ex + side * span * 0.17, ey - h * 0.12); }, wood[2], Math.max(0.22, h * 0.007));
+      hdLine(g, wood[1], [[mix(x, ex, 0.65), mix(sy, ey, 0.6)], [ex - side * span * 0.12, ey - h * 0.08]], Math.max(0.2, h * 0.008));
+      hdPath(g, null, p => { p.moveTo(x, sy - 0.3); p.quadraticCurveTo(x + side * span * 0.5, sy - h * 0.07, mix(x, ex, 0.8), mix(sy, ey, 0.8) - 0.3); }, palette.snow[0], Math.max(0.35, h * 0.011));
+    }
+    hdOval(g, palette.snow[0], x, y, h * 0.06, h * 0.015);
+    g.restore();
+  }
+
+  function drawRockHD(g, item, palette) {
+    const {x, y, size: s} = item, random = randomFrom(item.seed), h = Math.max(1.6, s * between(random, 0.4, 0.78)), w = s * 0.63;
+    g.save(); hdShadow(g, palette, x, y, w * 1.1, h * 0.18);
+    const gradient = hdGradient(g, x - w, y - h, x + w, y, [palette.stone[3], palette.stone[2], palette.stone[0]]);
+    hdPath(g, gradient, p => {
+      p.moveTo(x - w, y); p.quadraticCurveTo(x - w * 1.1, y - h * 0.4, x - w * 0.55, y - h * 0.76);
+      p.quadraticCurveTo(x - w * 0.15, y - h * 1.1, x + w * 0.57, y - h * 0.83);
+      p.quadraticCurveTo(x + w * 0.86, y - h * 0.7, x + w, y - h * 0.13);
+      p.quadraticCurveTo(x + w * 0.5, y + h * 0.1, x - w, y); p.closePath();
+    });
+    hdPath(g, palette.stone[1], p => { p.moveTo(x + w * 0.2, y - h * 0.53); p.lineTo(x + w * 0.57, y - h * 0.83); p.quadraticCurveTo(x + w * 0.9, y - h * 0.7, x + w, y - h * 0.13); p.lineTo(x + w * 0.4, y); p.closePath(); });
+    hdLine(g, palette.stone[0], [[x - w * 0.15, y - h * 0.74], [x - w * 0.28, y - h * 0.43], [x - w * 0.07, y - h * 0.2]], 0.25);
+    if (s > 5 && palette.season !== 'winter') {
+      for (let i = 0; i < 8; i++) hdOval(g, pick(random, palette.grass.slice(2)), x + between(random, -0.85, 0.3) * w, y - random() * h * 0.14, between(random, 0.2, 0.8), 0.25);
+    }
+    g.restore();
+  }
+
+  function drawUnderstoryHD(g, item, palette) {
+    const {x, y, size: s} = item, random = randomFrom(item.seed);
+    g.save(); hdShadow(g, palette, x, y, s * 0.65, s * 0.12);
+    if (item.kind === 'stump') {
+      const w = s * 0.65, h = s * 0.7;
+      hdPath(g, hdGradient(g, x, y, x + w, y, [palette.wood[0], palette.wood[2], palette.wood[1]]), p => {
+        p.moveTo(x - 0.3, y - h); p.lineTo(x + w, y - h); p.lineTo(x + w + 0.3, y); p.quadraticCurveTo(x + w * 0.5, y + 0.5, x, y); p.closePath();
+      });
+      hdOval(g, palette.wood[4], x + w / 2, y - h, w * 0.55, s * 0.16);
+      hdPath(g, null, p => p.ellipse(x + w / 2, y - h, w * 0.3, s * 0.08, 0, 0, Math.PI * 2), palette.wood[1], 0.22);
+      hdLine(g, palette.wood[0], [[x + w * 0.7, y - h + 0.4], [x + w * 0.6, y - 0.3]], 0.25);
+    } else {
+      for (let i = 0; i < 7; i++) {
+        const px = x + between(random, -0.6, 0.6) * s, py = y - between(random, 0.2, 0.65) * s;
+        const r = between(random, 0.25, 0.45) * s;
+        hdOval(g, hdGradient(g, px, py - r, px + r * 0.4, py + r, [palette.leaf[3], palette.leaf[1], palette.leaf[0]]), px, py, r, r * 0.8);
+        if (s > 4 && palette.season === 'autumn') for (let b = 0; b < 3; b++) hdOval(g, seasonTone('#ba4b55', palette.phase), px + b * 0.45 - 0.4, py - r * 0.3, 0.22, 0.23);
+        if (palette.season === 'spring' && i % 2 === 0) hdOval(g, palette.flowers[i % 3], px, py - r * 0.5, 0.4, 0.3);
+      }
+    }
+    g.restore();
+  }
+
+  function drawFenceHD(g, item, palette) {
+    const {a, b, height: h, gate} = item, wood = palette.wood;
+    g.save();
+    for (const rail of [0.28, 0.69]) {
+      for (const [from, to] of gate ? [[0, 0.35], [0.65, 1]] : [[0, 1]]) {
+        const points = [[mix(a[0], b[0], from), mix(a[1], b[1], from) - h * rail], [mix(a[0], b[0], to), mix(a[1], b[1], to) - h * rail]];
+        hdLine(g, wood[0], points, 1.15);
+        hdLine(g, wood[3], points.map(([x, y]) => [x, y - 0.25]), 0.55);
+        if (palette.season === 'winter') hdLine(g, palette.snow[0], points.map(([x, y]) => [x, y - 0.7]), 0.6);
+      }
+    }
+    const posts = Math.max(2, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 6));
+    for (let i = 0; i <= posts; i++) {
+      if (gate && i / posts > 0.36 && i / posts < 0.64) continue;
+      const x = mix(a[0], b[0], i / posts), y = mix(a[1], b[1], i / posts);
+      hdRound(g, hdGradient(g, x, y, x + 1.4, y, [wood[3], wood[1], wood[0]]), x - 0.2, y - h, 1.5, h + 0.8, 0.25);
+      polygon(g, wood[4], [[x - 0.4, y - h], [x + 0.55, y - h - 0.85], [x + 1.5, y - h]]);
+      if (palette.season === 'winter') hdOval(g, palette.snow[0], x + 0.55, y - h - 0.2, 1.05, 0.4);
+      hdOval(g, wood[0], x + 0.5, y - h * 0.66, 0.13, 0.13);
+    }
+    g.restore();
+  }
+
+  function hdWindow(g, window, palette, house) {
+    const {x, y, w, h} = window, wood = palette.wood;
+    hdRound(g, wood[0], x - 0.8, y - 0.8, w + 1.6, h + 1.6, 0.6);
+    hdRound(g, hdGradient(g, x, y, x + w, y + h, [palette.glass, palette.hills[1]]), x, y, w, h, 0.4);
+    hdPath(g, null, p => { p.moveTo(x + 0.7, y + h - 0.6); p.lineTo(x + w - 0.7, y + 0.7); }, palette.mist, 0.25);
+    hdLine(g, wood[3], [[x + w / 2, y], [x + w / 2, y + h]], 0.4);
+    hdLine(g, wood[3], [[x, y + h * 0.5], [x + w, y + h * 0.5]], 0.35);
+    if (w > 3) {
+      for (const sx of [x - 2, x + w + 0.8]) {
+        hdRound(g, wood[house.roofVariant % 2 ? 1 : 2], sx, y - 0.2, 1.2, h + 0.5, 0.2);
+        hdLine(g, wood[4], [[sx + 0.2, y + 0.8], [sx + 0.9, y + 0.8]], 0.2);
+        hdLine(g, wood[0], [[sx + 0.2, y + h - 0.7], [sx + 0.9, y + h - 0.7]], 0.2);
+      }
+    }
+    hdRound(g, wood[4], x - 1.3, y + h, w + 2.6, 0.75, 0.2);
+    if (palette.season !== 'winter' && w > 3 && house.seed % 3 !== 0) {
+      hdRound(g, wood[1], x - 0.6, y + h + 0.7, w + 1.2, 1.25, 0.3);
+      for (let i = 0; i < 4; i++) {
+        hdOval(g, palette.leaf[2], x + 0.5 + i * (w - 1) / 3, y + h + 0.45, 0.7, 0.5);
+        hdOval(g, palette.flowers[i % 3], x + 0.5 + i * (w - 1) / 3, y + h + 0.1, 0.35, 0.35);
+      }
+    }
+  }
+
+  function drawHouseHD(g, house, palette, contact = true) {
+    const d = dimensions(house), {left, right, depth, wall, roof, peak, rise, style, front} = d;
+    const wood = palette.wood, tile = palette.roofs[house.roofVariant], random = randomFrom(house.seed);
+    const side = house.view === 'side';
+    const doorX = left + Math.floor(front * 0.7), dh = house.style === 'shed' ? 7 : Math.min(11, wall - 2), dw = house.style === 'lodge' ? 7 : 5;
+    g.save();
+    if (contact) hdShadow(g, palette, house.x + 2, house.y + 0.5, (front + depth) * 0.62, 3.5);
+    g.translate(house.x, house.y); g.scale(house.face, 1);
+    polygon(g, palette.stone[0], [[left - 0.8, -3.5], [right, -3.5], [right + depth + 0.5, -rise - 3.5], [right + depth + 0.5, -rise], [right, 1], [left - 0.8, 1]]);
+    for (let x = left; x < right; x += 3.2) {
+      hdRound(g, palette.stone[x % 2 ? 2 : 1], x, -2.5, 2.7, 2.2, 0.4);
+    }
+    if (depth) {
+      polygon(g, hdGradient(g, right, -wall, right + depth, 0, [wood[1], wood[0]]), [[right, -wall], [right + depth, -wall - rise], [right + depth, -rise - 2], [right, -2]]);
+      for (let y = -wall + 2; y < -2; y += 2.7) {
+        hdLine(g, wood[0], [[right, y], [right + depth, y - rise]], 0.55);
+        hdLine(g, wood[2], [[right, y - 0.5], [right + depth, y - rise - 0.5]], 0.27);
+      }
+      if (depth > 7) {
+        const wx = right + depth * 0.45, wy = -wall * 0.68 - rise * 0.45;
+        polygon(g, wood[0], [[wx - 1.6, wy - 0.7], [wx + 1.6, wy - rise / depth * 3.2 - 0.7], [wx + 1.6, wy + 3.8 - rise / depth * 3.2], [wx - 1.6, wy + 3.8]]);
+        polygon(g, palette.glass, [[wx - 1.1, wy], [wx + 1.1, wy - rise / depth * 2.2], [wx + 1.1, wy + 3 - rise / depth * 2.2], [wx - 1.1, wy + 3]]);
+      }
+    }
+    hdRound(g, hdGradient(g, left, -wall, right, 0, [wood[4], wood[3], wood[2]]), left, -wall, front, wall - 2, 0.4);
+    if (!side) polygon(g, hdGradient(g, left, -wall - roof, peak, -wall, [wood[4], wood[2]]), [[left, -wall], [peak, -wall - roof], [right, -wall]]);
+    for (let y = -wall + 2; y < -3; y += 2.7) {
+      hdLine(g, wood[1], [[left, y], [right, y]], 0.45);
+      hdLine(g, wood[4], [[left + 0.6, y + 0.45], [right - 0.6, y + 0.45]], 0.22);
+      for (let knot = 0; knot < 2; knot++) {
+        const x = between(random, left + 2, right - 3);
+        hdPath(g, null, p => p.ellipse(x, y - 0.8, between(random, 0.45, 1), 0.15, 0, 0, Math.PI * 2), wood[2], 0.15);
+      }
+    }
+    for (const x of [left + 0.35, right - 0.8]) {
+      hdRound(g, wood[1], x, -wall, 1.1, wall - 1, 0.15);
+      hdLine(g, wood[5], [[x + 0.3, -wall + 1], [x + 0.3, -2]], 0.25);
+    }
+    if (style.chimney) {
+      const cx = side ? right - 10 : peak + Math.round(depth * 0.68);
+      hdRound(g, hdGradient(g, cx, 0, cx + 4, 0, [palette.stone[2], palette.stone[1], palette.stone[0]]), cx, -wall - roof - rise - 6, 4, 11, 0.2);
+      for (let y = -wall - roof - rise - 4; y < -wall - roof - rise + 3; y += 2) hdLine(g, palette.stone[0], [[cx, y], [cx + 4, y]], 0.25);
+      hdRound(g, palette.stone[3], cx - 0.6, -wall - roof - rise - 7, 5.2, 1.6, 0.3);
+      hdOval(g, palette.stone[0], cx + 2, -wall - roof - rise - 6.8, 1.7, 0.4);
+    }
+    const roofPoints = side
+      ? [[left - 3, -wall + 0.5], [left + 2, -wall - roof], [right - 2, -wall - roof], [right + 3, -wall + 0.5]]
+      : [[peak, -wall - roof - 0.5], [peak + depth, -wall - roof - rise - 0.5], [right + depth + 2.5, -wall - rise + 0.5], [right + 2.5, -wall + 0.5]];
+    if (side || depth) {
+      polygon(g, hdGradient(g, 0, -wall - roof - rise, 0, -wall + 1, [tile[3], tile[2], tile[0]]), roofPoints);
+      g.save(); g.clip();
+      for (let row = 0; row < roof + rise + 4; row += 2.2) {
+        const y = -wall - roof - rise + row;
+        hdLine(g, tile[1], [[left - 5, y], [right + depth + 4, y - (side ? 0 : rise * 0.3)]], 0.28);
+        for (let x = left - 4 + (Math.floor(row / 2.2) % 2) * 1.8; x < right + depth + 3; x += 3.7) {
+          hdPath(g, null, p => { p.moveTo(x, y); p.quadraticCurveTo(x + 0.5, y + 1, x + 0.2, y + 2.2); }, random() < 0.5 ? tile[1] : tile[3], 0.22);
+        }
+      }
+      g.restore();
+      hdLine(g, tile[3], side ? [[left + 2, -wall - roof], [right - 2, -wall - roof]] : [[peak, -wall - roof - 0.5], [peak + depth, -wall - roof - rise - 0.5]], 0.8);
+    }
+    if (!side) {
+      // The front gable keeps the same geometry in both renderers.
+      hdLine(g, wood[0], [[left - 2.5, -wall + 1], [peak, -wall - roof - 1], [right + 2.5, -wall + 1]], 1.8);
+      hdLine(g, wood[5], [[left - 2.5, -wall], [peak, -wall - roof - 1], [right + 2.5, -wall]], 0.65);
+      hdLine(g, wood[1], [[left, -wall + 0.8], [right, -wall + 0.8]], 1);
+      hdLine(g, wood[3], [[peak, -wall - roof + 2], [peak, -wall + 1]], 0.65);
+    } else hdLine(g, wood[0], [[left - 3, -wall + 0.6], [right + 3, -wall + 0.6]], 1.4);
+    hdRound(g, wood[0], doorX - 0.7, -dh - 1, dw + 1.4, dh + 1, 0.8);
+    hdRound(g, hdGradient(g, doorX, -dh, doorX + dw, 0, [wood[2], wood[1], wood[0]]), doorX, -dh, dw, dh, 0.5);
+    hdRound(g, null, doorX + 0.7, -dh + 1, dw - 1.4, dh * 0.45 - 0.8, 0.2, wood[3], 0.25);
+    hdRound(g, null, doorX + 0.7, -dh * 0.45, dw - 1.4, dh * 0.45 - 1, 0.2, wood[3], 0.25);
+    hdOval(g, wood[5], doorX + dw - 0.9, -dh * 0.43, 0.26, 0.3);
+    hdRound(g, palette.stone[2], doorX - 1.6, 0, dw + 3.2, 1.6, 0.3);
+    hdLine(g, palette.stone[3], [[doorX - 1.4, 0.1], [doorX + dw + 1.4, 0.1]], 0.3);
+    for (const window of houseWindows(house, d)) hdWindow(g, window, palette, house);
+    if (style.porch && !side) {
+      const start = doorX - 3;
+      polygon(g, tile[1], [[start, -dh - 2], [start + 3, -dh - 5], [right, -dh - 5], [right + 1, -dh - 2]]);
+      hdLine(g, tile[3], [[start, -dh - 2], [right + 1, -dh - 2]], 0.65);
+      for (const px of [start + 0.5, right]) hdLine(g, wood[3], [[px, -dh - 2], [px, 1]], 0.85);
+    }
+    if (house.seed % 2 === 0 && palette.season !== 'winter') {
+      // A terracotta pot by the door.
+      hdPath(g, seasonTone('#b76e4b', palette.phase), p => { p.moveTo(doorX - 4, -2); p.lineTo(doorX - 1.7, -2); p.lineTo(doorX - 2, 0); p.lineTo(doorX - 3.7, 0); p.closePath(); });
+      for (let i = 0; i < 3; i++) {
+        hdLine(g, palette.leaf[2], [[doorX - 2.8, -2], [doorX - 4 + i, -4 - i % 2]], 0.3);
+        hdOval(g, palette.flowers[i], doorX - 4 + i, -4 - i % 2, 0.5, 0.45);
+      }
+    }
+    g.restore();
+  }
+
+  function drawSnowCoverHD(g, item, palette) {
+    const snow = palette.snow;
+    g.save();
+    if (item.kind === 'house') {
+      const {left, right, front, depth, wall, roof, peak, rise} = dimensions(item);
+      g.translate(item.x, item.y); g.scale(item.face, 1);
+      if (item.view === 'side') {
+        polygon(g, hdGradient(g, 0, -wall - roof, 0, -wall, [snow[0], snow[1]]), [[left - 3, -wall], [left + 2, -wall - roof - 1], [right - 2, -wall - roof - 1], [right + 3, -wall]]);
+        hdLine(g, snow[0], [[left - 2.5, -wall - 0.4], [right + 2.5, -wall - 0.4]], 1.8);
+        hdLine(g, snow[0], [[left + 2, -wall - roof - 1], [right - 2, -wall - roof - 1]], 1.1);
+      } else {
+        if (depth) {
+          polygon(g, hdGradient(g, 0, -wall - roof - rise, 0, -wall + 1, [snow[0], snow[1]]), [[peak, -wall - roof - 1], [peak + depth, -wall - roof - rise - 1], [right + depth + 3, -wall - rise], [right + 2.5, -wall + 0.7]]);
+          hdLine(g, snow[0], [[right + 2.5, -wall], [right + depth + 2.5, -wall - rise]], 1.7);
+          hdLine(g, snow[0], [[peak, -wall - roof - 1], [peak + depth, -wall - roof - rise - 1]], 1.4);
+        }
+        hdLine(g, snow[0], [[left - 2.7, -wall - 0.5], [peak, -wall - roof - 1], [right + 2.4, -wall - 0.1]], 1.65);
+      }
+      for (const window of houseWindows(item, dimensions(item))) hdRound(g, snow[0], window.x - 1.2, window.y + window.h + 0.6, window.w + 2.4, 0.9, 0.45);
+      for (let i = 0; i < 4; i++) {
+        const x = left + front * (0.15 + i * 0.22);
+        const y = item.view === 'side' ? -wall + 0.5 : -wall - Math.max(0, roof * (1 - Math.abs((x - peak) / (front * 0.5))));
+        hdPath(g, snow[1], p => { p.moveTo(x - 0.25, y); p.lineTo(x, y + 1.1 + i % 2); p.lineTo(x + 0.3, y); p.closePath(); });
+      }
+    } else if (item.kind === 'pine' || item.kind === 'festivalTree') {
+      const h = item.height, half = item.width * 0.5, random = randomFrom(item.seed);
+      const bend = integer(random, -Math.ceil(half * 0.25), Math.ceil(half * 0.25));
+      const count = h > 44 ? 6 : h > 23 ? 5 : 4;
+      for (let i = count - 1; i >= 0; i--) {
+        const {x: cx, top, bottom: base, span} = pineTier(item, i, count, bend);
+        hdPath(g, hdGradient(g, cx, top, cx, base, [snow[0], snow[1]]), p => {
+          p.moveTo(cx, top + 0.2); p.quadraticCurveTo(cx + span * 0.08, top + h * 0.09, cx + span * 0.63, base - h * 0.055);
+          p.quadraticCurveTo(cx + span * 0.48, base - h * 0.035, cx + span * 0.28, base - h * 0.07);
+          p.quadraticCurveTo(cx + span * 0.15, base - h * 0.01, cx - span * 0.04, base - h * 0.07);
+          p.quadraticCurveTo(cx - span * 0.2, base - h * 0.04, cx - span * 0.35, base - h * 0.07);
+          p.quadraticCurveTo(cx - span * 0.5, base - h * 0.035, cx - span * 0.72, base - h * 0.055);
+          p.quadraticCurveTo(cx - span * 0.15, top + h * 0.12, cx, top + 0.2); p.closePath();
+        });
+      }
+    } else if (['rock', 'bush', 'stump'].includes(item.kind)) {
+      hdOval(g, hdGradient(g, item.x, item.y - item.size, item.x, item.y, [snow[0], snow[1]]), item.x, item.y - item.size * 0.55, item.size * 0.57, Math.max(0.4, item.size * 0.18));
+    }
+    g.restore();
+  }
+
+  function drawTreeDecorationsHD(g, tree, palette) {
+    g.save();
+    // The wires follow each tier's own bent axis, just like the ornaments.
+    for (let row = 0; row < 6; row++) {
+      const bulbs = tree.lights.filter(bulb => bulb.row === row);
+      if (bulbs.length < 2) continue;
+      hdPath(g, null, p => hdSmooth(p, bulbs.map(b => [b.x + 0.3, b.y + 0.4])), seasonTone('#8a874c', palette.phase), 0.35);
+    }
+    for (const ornament of tree.ornaments) {
+      const {x, y, color, size} = ornament;
+      const c = seasonTone(festiveColors[color], palette.phase), r = size || 1.2;
+      hdLine(g, seasonTone('#b7ad8c', palette.phase), [[x, y - r - 1], [x, y - r]], 0.2);
+      hdOval(g, hdGradient(g, x - r, y - r, x + r, y + r, [seasonTone('#f5e7c8', palette.phase), c, seasonTone('#513d58', palette.phase)]), x, y, r * 0.88, r);
+      hdOval(g, palette.snow[0], x - r * 0.3, y - r * 0.35, r * 0.18, r * 0.22);
+      if (ornament.shape === 1) hdLine(g, palette.snow[0], [[x - r * 0.65, y], [x + r * 0.65, y]], 0.22);
+    }
+    for (const bulb of tree.lights) hdOval(g, seasonTone(festiveColors[bulb.color], palette.phase), bulb.x, bulb.y, 0.48, 0.6);
+    drawTreeStar(g, tree, seasonTone('#f9cf77', palette.phase));
+    g.restore();
+  }
+
+  function drawPropHD(g, item, palette, contact = true) {
+    switch (item.kind) {
+      case 'pine': case 'festivalTree': drawPineHD(g, item, palette, contact); break;
+      case 'leaf': drawLeafTreeHD(g, item, palette, contact); break;
+      case 'house': drawHouseHD(g, item, palette, contact); break;
+      case 'rock': drawRockHD(g, item, palette); break;
+      case 'fence': drawFenceHD(g, item, palette); break;
+      default: drawUnderstoryHD(g, item, palette);
+    }
+    if (palette.season === 'winter') drawSnowCoverHD(g, item, palette);
+    if (item.kind === 'festivalTree') drawTreeDecorationsHD(g, item, palette);
+  }
+
+  function generateCloudLayersHD(code) {
+    const base = generateCloudLayersPixel(code);
+    const random = randomFrom(hash(code + '/hd-clouds'));
+    return base.map((layer, type) => {
+      if (!layer) return null;
+      const surface = makeCanvas(CLOUD_TILE, SKY_HEIGHT), g = surface.getContext('2d');
+      if (type >= 3) {
+        g.filter = 'blur(' + renderScale * 0.9 + 'px)';
+        for (const x of [-CLOUD_TILE, 0, CLOUD_TILE]) blit(g, layer.canvas, x, 0);
+        g.filter = 'none';
+      } else if (type === 1) {
+        for (let i = 0; i < 11; i++) {
+          const x = i * 71 + between(random, -30, 20), y = between(random, 12, 76), w = between(random, 44, 118);
+          for (let strand = 0; strand < 9; strand++) {
+            const sy = y + strand * 0.7, sx = x + strand * 2, length = w - strand * 3;
+            const gradient = g.createLinearGradient(sx, sy, sx + length, sy);
+            gradient.addColorStop(0, 'rgba(220,228,233,0)'); gradient.addColorStop(0.4, 'rgba(220,228,233,.58)'); gradient.addColorStop(1, 'rgba(238,240,242,0)');
+            hdPath(g, null, p => { p.moveTo(sx, sy); p.bezierCurveTo(sx + length * 0.3, sy - 2, sx + length * 0.7, sy - 11, sx + length, sy - 9 + strand * 0.3); }, gradient, 0.4 + strand * 0.05);
+          }
+        }
+      } else {
+        for (let i = 0; i < 9; i++) {
+          const x = i * 87 + between(random, -25, 25), y = between(random, 35, 110), w = between(random, 35, 85), h = between(random, 9, 24);
+          for (const shift of [-CLOUD_TILE, 0, CLOUD_TILE]) {
+            hdOval(g, hdGradient(g, 0, y - h, 0, y + h * 0.4, ['#e6eaeb', '#9da9b4']), x + shift, y, w * 0.6, h * 0.4);
+            for (let j = 0; j < 7; j++) {
+              const px = x + (j / 6 - 0.5) * w + shift, py = y - Math.sin(j / 6 * Math.PI) * h * 0.58;
+              const rx = w * between(random, 0.13, 0.22), ry = h * between(random, 0.35, 0.7);
+              const gradient = g.createRadialGradient(px - rx * 0.3, py - ry * 0.5, 0, px, py, Math.max(rx, ry));
+              gradient.addColorStop(0, '#f6f5ed'); gradient.addColorStop(0.65, '#d9dfe0'); gradient.addColorStop(1, '#a1adb8');
+              hdOval(g, gradient, px, py, rx, ry);
+            }
+            hdOval(g, hdGradient(g, 0, y, 0, y + h * 0.4, ['#c2cbd0', '#a3b0bb']), x + shift, y + h * 0.15, w * 0.53, h * 0.28);
+          }
+        }
+      }
+      const sample = makeCanvas(CLOUD_TILE, SKY_HEIGHT, 1), sg = sample.getContext('2d');
+      sg.drawImage(surface, 0, 0, CLOUD_TILE, SKY_HEIGHT);
+      const data = sg.getImageData(0, 0, CLOUD_TILE, SKY_HEIGHT).data;
+      const opacity = new Uint8Array(CLOUD_TILE * SKY_HEIGHT);
+      for (let i = 0; i < opacity.length; i++) opacity[i] = data[i * 4 + 3];
+      return {canvas: surface, opacity, speed: layer.speed};
+    });
+  }
+
+  function drawSkyHD(world, light, motion, weather, clouds, sun, moon) {
+    const a = seasonalColors[light.from], b = seasonalColors[light.to];
+    const sky = a.sky.map((c, i) => blendRgb(blendRgb(rgb(c), rgb(b.sky[i]), light.blend), [75, 93, 115], clouds.coverage * (0.12 + i * 0.095)));
+    const gradient = ctx.createLinearGradient(0, 0, 0, 154);
+    [0, 0.42, 0.73, 1].forEach((t, i) => gradient.addColorStop(t, cssColor(sky[i])));
+    ctx.fillStyle = gradient; ctx.fillRect(0, 0, W, H);
+    ctx.save();
+    if (moon.darkness > 0) {
+      for (const star of world.atmosphere.stars) {
+        const shimmer = 0.74 + Math.sin(motion * 1.2 + star.flicker) * 0.26;
+        ctx.globalAlpha = moon.darkness * mix(0.13, 0.75, star.tone) * shimmer;
+        hdOval(ctx, star.tone > 0.72 ? '#f8e8bb' : '#c4d6ed', star.x, star.y, mix(0.14, 0.38, star.tone), mix(0.14, 0.38, star.tone));
+        if (star.tone > 0.96) {
+          ctx.globalAlpha *= 0.4;
+          hdPath(ctx, null, p => { p.moveTo(star.x - 1.1, star.y); p.lineTo(star.x + 1.1, star.y); p.moveTo(star.x, star.y - 1.1); p.lineTo(star.x, star.y + 1.1); }, '#e5dfd4', 0.18);
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+    if (sun.active) {
+      const {x, y, color, elevation} = sun, low = 1 - smooth((elevation - 0.15) / 0.68);
+      const rim = ctx.createLinearGradient(0, 0, 0, SKY_HEIGHT);
+      rim.addColorStop(0.18, translucent(color, 0));
+      rim.addColorStop(0.7, translucent(blendRgb(color, [241, 123, 153], 0.4), low * sun.glow * 0.25));
+      rim.addColorStop(1, translucent(blendRgb(color, [255, 170, 104], 0.28), low * sun.glow * 0.65));
+      ctx.fillStyle = rim; ctx.fillRect(0, 0, W, SKY_HEIGHT);
+      const halo = ctx.createRadialGradient(x, y, 3, x, y, mix(57, 144, low));
+      halo.addColorStop(0, translucent(blendRgb(color, [255, 239, 222], 0.4), sun.glow * 0.6));
+      halo.addColorStop(0.3, translucent(color, sun.glow * 0.25)); halo.addColorStop(1, translucent(color, 0));
+      ctx.fillStyle = halo; ctx.fillRect(0, 0, W, SKY_HEIGHT);
+      const disk = g => hdGradient(g, x, y - 9, x, y + 9, ['#fffae5', cssColor(blendRgb(color, [255, 250, 227], elevation * 0.65))]);
+      ctx.globalAlpha = 1 - weather.fog * 0.48;
+      hdOval(ctx, disk(ctx), x, y, 8.7, 8.7);
+      ctx.globalAlpha = 1;
+    }
+    if (moon.brightness > 0) {
+      const {x, y} = moon;
+      const halo = ctx.createRadialGradient(x, y, 3, x, y, 42);
+      halo.addColorStop(0, translucent([164, 191, 244], moon.brightness * 0.25));
+      halo.addColorStop(0.36, translucent([141, 172, 230], moon.brightness * 0.12)); halo.addColorStop(1, 'rgba(121,151,217,0)');
+      ctx.fillStyle = halo; ctx.fillRect(0, 0, W, SKY_HEIGHT);
+      ctx.globalAlpha = moon.brightness;
+      hdPath(ctx, hdGradient(ctx, x - 4, y - 6, x + 3, y + 6, ['#f5f0d7', '#becad0']), p => {
+        p.moveTo(x + 2, y - 5.6); p.bezierCurveTo(x - 7, y - 8, x - 10, y + 5, x - 1, y + 6);
+        p.quadraticCurveTo(x + 3, y + 7, x + 5, y + 3); p.bezierCurveTo(x - 1, y + 5, x - 5, y - 3, x + 2, y - 5.6); p.closePath();
+      });
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+    drawClouds(clouds, sun, moon.darkness, weather.rain);
+  }
+
+  function drawSnowfallHD(world, motion, intensity, darkness) {
+    const wind = Math.sin(motion * 0.16) * 13 + Math.sin(motion * 0.057) * 9;
+    ctx.save();
+    for (const [i, flake] of world.seasonEffects.snow.entries()) {
+      if (i / world.seasonEffects.snow.length > intensity) continue;
+      const x = wrap(flake.x + motion * flake.drift + Math.sin(motion * 0.8 + flake.phase) * (5 + flake.size * 12) + wind * Math.sin(motion * 0.24 + flake.phase), W + 48) - 24;
+      const y = wrap(flake.y + motion * flake.speed + Math.sin(motion * 1.3 + flake.phase) * 4, H + 24) - 12;
+      ctx.globalAlpha = mix(0.3, 0.87, flake.size) * (1 - darkness * 0.28);
+      const size = mix(0.15, 0.72, flake.size);
+      if (flake.size > 0.88) {
+        ctx.save(); ctx.translate(x, y); ctx.rotate(motion * 0.6 + flake.phase);
+        for (let arm = 0; arm < 3; arm++) {
+          const a = arm / 3 * Math.PI;
+          hdLine(ctx, '#edf3f6', [[Math.cos(a) * size, Math.sin(a) * size], [-Math.cos(a) * size, -Math.sin(a) * size]], 0.18);
+        }
+        ctx.restore();
+      } else hdOval(ctx, flake.size > 0.6 ? '#edf3f6' : '#bcd0e2', x, y, size, size * 0.85);
+    }
+    ctx.restore();
+  }
+
+  function drawRainHD(world, motion, intensity) {
+    ctx.save();
+    for (const drop of world.atmosphere.drops) {
+      const travel = motion * drop.speed, x = wrap(drop.x - travel * 0.36, W + 80) - 35, y = wrap(drop.y + travel, H + 50) - 22;
+      const gradient = ctx.createLinearGradient(x, y, x - drop.length * 0.36, y + drop.length);
+      gradient.addColorStop(0, 'rgba(203,222,231,0)'); gradient.addColorStop(1, 'rgba(203,222,231,.8)');
+      ctx.globalAlpha = intensity * mix(0.17, 0.5, drop.tone);
+      hdLine(ctx, gradient, [[x, y], [x - drop.length * 0.36, y + drop.length]], 0.25 + drop.tone * 0.15);
+      if (y > 182 && drop.tone > 0.82 && wrap(travel + drop.y, 67) < 7) {
+        hdPath(ctx, null, p => p.ellipse(x, y + 2, 1.8, 0.6, 0, 0, Math.PI * 2), '#cbd8cf', 0.2);
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawFootprintsHD(g, world, motion) {
+    const lifetime = 115 / (1 + weather.rain * 2.2);
+    g.save();
+    for (const mark of world.seasonEffects.footprints) {
+      g.globalAlpha = clamp(1 - (motion - mark.born) / lifetime) * 0.4;
+      const side = mark.step ? 1 : -1;
+      if (mark.person) {
+        g.save(); g.translate(mark.x, mark.y + side * 0.6); g.rotate(mark.direction * -0.35);
+        hdOval(g, '#617f9a', 0, 0, 0.42, 0.8); hdOval(g, '#d9e4eb', 0.1, 0.2, 0.22, 0.45); g.restore();
+      } else {
+        hdOval(g, '#617f9a', mark.x, mark.y + side * 0.5, 0.47, 0.33);
+        for (let i = 0; i < 3; i++) hdOval(g, '#617f9a', mark.x + mark.direction * 0.5, mark.y + side * 0.5 - 0.3 + i * 0.3, 0.13, 0.13);
+      }
+    }
+    g.restore();
+  }
+
+  function drawLitWindowHD(g, window, strength) {
+    const {x, y, w, h} = window;
+    g.save();
+    const glow = g.createRadialGradient(x + w / 2, y + h / 2, 0, x + w / 2, y + h / 2, Math.max(w, h) * 1.4);
+    glow.addColorStop(0, 'rgba(255,179,77,.27)'); glow.addColorStop(1, 'rgba(255,179,77,0)');
+    g.globalAlpha = strength; hdOval(g, glow, x + w / 2, y + h / 2, w * 1.5, h * 1.5);
+    hdRound(g, hdGradient(g, x, y, x, y + h, ['#f9d793', '#eaa14e', '#cb763a']), x + 0.15, y + 0.15, w - 0.3, h - 0.3, 0.35);
+    hdPath(g, 'rgba(255,244,193,.45)', p => { p.moveTo(x + 0.3, y + 0.2); p.lineTo(x + w * 0.3, y + 0.2); p.quadraticCurveTo(x + w * 0.5, y + h * 0.55, x + 0.3, y + h - 0.2); p.closePath(); });
+    hdLine(g, '#8e6642', [[x + w / 2, y], [x + w / 2, y + h]], 0.4);
+    hdLine(g, '#8e6642', [[x, y + h / 2], [x + w, y + h / 2]], 0.35);
+    g.restore();
+  }
+
+  function desiredRenderScale() {
+    if (renderMode === 'pixel') return 1;
+    const display = Math.min(window.innerWidth / W, window.innerHeight / H);
+    return clamp(Math.ceil(display * (window.devicePixelRatio || 1)), 2, 4);
+  }
+
+  function configureRenderer() {
+    renderScale = desiredRenderScale();
+    prepareSurface(canvas, W, H);
+    for (const surface of [landCanvas, shadowCanvas, festivalCanvas, windowLightCanvas]) prepareSurface(surface, W, H);
+    prepareSurface(cloudCanvas, W, SKY_HEIGHT);
+    canvas.classList.toggle('hi-dpi', renderMode === 'hd');
+    canvas.setAttribute('aria-label', (renderMode === 'hd' ? 'Рисованная' : 'Пиксельная') + ' лесная деревня с жителями, питомцами, лесными зверями, птицами, погодой и сменой суток');
+    for (const button of document.querySelectorAll('[data-render]')) button.setAttribute('aria-pressed', String(button.dataset.render === renderMode));
+  }
+
+  function rebuildArtwork() {
+    // Preserve the simulation, tracks, time, weather and population when changing only the artwork.
+    world.festivalTree.glows = null;
+    world.cloudLayers = renderMode === 'hd' ? generateCloudLayersHD(world.code) : generateCloudLayersPixel(world.code);
+    world.moonMasks = paintMoonlight(world);
+    layers = Object.fromEntries(Object.entries(seasonalColors).map(([phase, palette]) => [phase, paintLand(world, palette)]));
+    world.foregroundMasks = buildForegroundMasks(world, layers.night.sprites);
+    shadowPosition = -1;
+  }
+
+  // Smooth illustrated inhabitants. All coordinates remain in the 480 × 270 world.
+  function characterShape(g, color, draw, stroke, width = 0.5) {
+    g.beginPath();
+    draw(g);
+    if (color) { g.fillStyle = color; g.fill(); }
+    if (stroke) { g.strokeStyle = stroke; g.lineWidth = width; g.lineCap = 'round'; g.lineJoin = 'round'; g.stroke(); }
+  }
+
+  function characterOval(g, color, x, y, rx, ry, angle = 0) {
+    characterShape(g, color, p => p.ellipse(x, y, Math.max(0.01, rx), Math.max(0.01, ry), angle, 0, Math.PI * 2));
+  }
+
+  function characterStroke(g, color, width, draw) {
+    characterShape(g, null, draw, color, width);
+  }
+
+  function characterTone(color, target, amount) {
+    return cssColor(blendRgb(rgb(color), rgb(target), amount));
+  }
+
+  function characterCoat(g, color, x0, y0, x1, y1) {
+    const paint = g.createLinearGradient(x0, y0, x1, y1);
+    paint.addColorStop(0, characterTone(color, '#fff0d0', 0.19));
+    paint.addColorStop(0.5, color);
+    paint.addColorStop(1, characterTone(color, '#26363b', 0.28));
+    return paint;
+  }
+
+  function drawGroundActorHD(g, actor, motion) {
+    if (actor.alpha < 0.01) return;
+    g.save();
+    g.globalAlpha = actor.alpha;
+    if (actor.kind === 'leafParticle') {
+      g.translate(actor.x, actor.leafY);
+      g.rotate(Math.sin(motion * 2.2 + actor.x) * 1.4 + motion * 0.7);
+      g.scale(actor.wide ? 1.3 : 0.8, 0.45 + Math.abs(Math.sin(motion + actor.x)) * 0.5);
+      characterShape(g, actor.color, p => { p.moveTo(-1, 0); p.bezierCurveTo(-0.5, -1.3, 0.8, -1.1, 1.3, 0); p.bezierCurveTo(0.5, 0.8, -0.2, 1, -1, 0); });
+      characterStroke(g, '#946643', 0.13, p => { p.moveTo(-1.3, 0.2); p.lineTo(0.7, -0.1); });
+      g.restore();
+      return;
+    }
+    if (actor.kind === 'fire') {
+      drawCampfireHD(g, actor, motion);
+      g.restore();
+      return;
+    }
+    const scale = mix(0.58, 1.02, clamp((actor.y - 151) / 110));
+    const stride = actor.moving ? Math.sin(motion * (actor.kind === 'hare' ? 15 : 9) + actor.offset) : 0;
+    const hop = actor.kind === 'hare' ? Math.max(0, stride) * 3 : 0;
+    g.globalAlpha = actor.alpha * 0.22;
+    characterOval(g, '#152e2b', actor.x + 0.7, actor.y + 0.25, (actor.kind === 'bear' ? 7 : actor.kind === 'deer' ? 5.5 : 4) * scale, scale * 1.3);
+    g.globalAlpha = actor.alpha;
+    g.translate(actor.x, actor.y);
+    g.scale((actor.direction || 1) * scale, scale);
+    if (actor.kind === 'person') characterPerson(g, actor, motion, stride);
+    else if (actor.kind === 'dog' && actor.sleeping) characterSleepingDog(g, actor, motion);
+    else characterAnimal(g, actor, motion, stride, hop);
+    g.restore();
+  }
+
+  function characterPerson(g, actor, motion, stride) {
+    const winter = season === 'winter';
+    const gardener = actor.working && (actor.activity === 'dig' || actor.activity === 'shovel');
+    const bend = gardener ? (Math.sin(motion * 4) + 1) * 0.8 : 0;
+    const seated = actor.seated;
+    const trousers = '#41535c';
+    if (seated) {
+      characterStroke(g, '#594332', 2.3, p => { p.moveTo(-3.5, -1.8); p.lineTo(3.4, -1.8); });
+      characterOval(g, '#b69160', 3.5, -1.8, 0.4, 1.15);
+      characterStroke(g, trousers, 1.45, p => { p.moveTo(0, -4); p.quadraticCurveTo(2, -2, 4, -3); p.lineTo(4.5, -0.5); });
+      characterStroke(g, '#303e46', 1.3, p => { p.moveTo(-1, -4); p.lineTo(2, -2.5); p.lineTo(2.5, 0); });
+      characterOval(g, '#353832', 4.9, -0.15, 1.2, 0.45);
+    } else {
+      characterStroke(g, '#34434c', 1.45, p => { p.moveTo(-0.8, -4.8); p.quadraticCurveTo(-1.8, -2.4, -1.7 - stride * 0.85, -0.2); });
+      characterOval(g, '#333831', -1.3 - stride * 0.85, 0, 1.25, 0.5);
+      characterStroke(g, trousers, 1.5, p => { p.moveTo(1.25, -4.8); p.quadraticCurveTo(1.6, -2, 1.5 + stride * 0.9, -0.2); });
+      characterOval(g, '#333831', 1.9 + stride * 0.9, 0.1, 1.3, 0.5);
+    }
+    g.save();
+    g.translate(bend, bend + (seated ? 1 : 0));
+    g.rotate(gardener ? bend * 0.09 : actor.moving ? Math.sin(motion * 9 + actor.offset) * 0.025 : 0);
+    const shirt = characterCoat(g, actor.shirt, -2, -9.3, 2.7, -3);
+    // A cut coat with a curved shoulder and hem, rather than a rectangular sprite.
+    characterShape(g, shirt, p => {
+      p.moveTo(-0.8, -9.2); p.quadraticCurveTo(-2.2, -9, -2.15, -7.5);
+      p.lineTo(-2.35, -4.2); p.quadraticCurveTo(0, -3.6, 2.6, -4.1);
+      p.lineTo(2.1, -7.5); p.quadraticCurveTo(2.1, -9, 0.9, -9.2); p.closePath();
+    });
+    if (winter) {
+      characterStroke(g, '#e5c282', 0.7, p => { p.moveTo(-1.5, -8.8); p.quadraticCurveTo(0.8, -8.1, 2.2, -8.8); p.lineTo(2.4, -6.6); });
+      characterStroke(g, characterTone(actor.shirt, '#192f38', 0.28), 0.28, p => { p.moveTo(0.6, -8); p.lineTo(0.8, -4.4); });
+      for (let i = 0; i < 3; i++) characterOval(g, '#e5d7b0', 1.15, -7.3 + i, 0.15, 0.15);
+    } else {
+      characterStroke(g, characterTone(actor.shirt, '#fff3cf', 0.3), 0.3, p => { p.moveTo(-1.5, -7.8); p.lineTo(-1.65, -4.9); });
+      if (actor.activity === 'dig') {
+        characterShape(g, '#a5ad91', p => { p.moveTo(-1.4, -7.1); p.lineTo(1.7, -7.1); p.lineTo(2, -4.3); p.quadraticCurveTo(0, -3.9, -1.7, -4.3); p.closePath(); });
+        characterStroke(g, '#a5ad91', 0.45, p => { p.moveTo(-1.1, -8.8); p.lineTo(-0.9, -6.7); p.moveTo(1.2, -8.8); p.lineTo(1, -6.7); });
+      }
+    }
+    characterOval(g, characterTone(actor.skin, '#9d6951', 0.15), 0.65, -9.4, 0.72, 0.7);
+    characterOval(g, characterCoat(g, actor.skin, -1.5, -12.5, 2.5, -9), 0.7, -11.35, 1.95, 2.15);
+    characterOval(g, actor.skin, 2.35, -10.75, 0.55, 0.48);
+    characterOval(g, characterTone(actor.skin, '#a76851', 0.3), -0.65, -10.9, 0.42, 0.55);
+    characterShape(g, actor.hair, p => {
+      p.moveTo(-1.15, -10.5); p.bezierCurveTo(-2, -13.8, 1.3, -14.4, 2.6, -12.3);
+      p.quadraticCurveTo(0.9, -12.9, 0.15, -12); p.lineTo(-0.4, -10.9); p.closePath();
+    });
+    characterOval(g, '#283331', 1.9, -11.65, 0.18, 0.25);
+    characterStroke(g, '#986851', 0.16, p => { p.moveTo(1.7, -10.3); p.quadraticCurveTo(2.05, -10.1, 2.3, -10.4); });
+    if (winter) {
+      characterShape(g, actor.shirt, p => { p.moveTo(-1.6, -12.1); p.bezierCurveTo(-1.9, -15.5, 2.7, -15.6, 2.9, -12.5); p.quadraticCurveTo(0.6, -12.8, -1.6, -12.1); });
+      characterStroke(g, '#e8d9b2', 0.65, p => { p.moveTo(-1.5, -12); p.quadraticCurveTo(0.5, -12.8, 2.8, -12.3); });
+      characterOval(g, '#eee2c4', 0.5, -14.8, 0.65, 0.6);
+    } else if (actor.activity === 'dig') {
+      characterOval(g, '#d2b37b', 0.5, -13.1, 3, 0.65);
+      characterShape(g, '#c5a16b', p => { p.moveTo(-1, -13.2); p.lineTo(-0.7, -14.5); p.quadraticCurveTo(0.6, -15, 1.8, -14); p.lineTo(2, -13); p.closePath(); });
+      characterStroke(g, '#867452', 0.35, p => { p.moveTo(-0.8, -13.4); p.lineTo(1.9, -13.4); });
+    }
+    const gesture = gardener ? 1.8 + bend : actor.working ? Math.sin(motion * 2 + actor.offset) * 1.1 : stride;
+    characterStroke(g, characterTone(actor.shirt, '#25383c', 0.2), 1.3, p => { p.moveTo(-1.4, -7.7); p.quadraticCurveTo(-2.7, -6.8, -2 + stride * 0.7, -5.1); });
+    characterStroke(g, actor.shirt, 1.5, p => { p.moveTo(1.35, -7.8); p.quadraticCurveTo(2.1, -6.1, 3.6, -6 + gesture); });
+    characterOval(g, actor.skin, 3.9, -5.9 + gesture, 0.58, 0.65);
+    g.restore();
+    if (gardener) {
+      const toolX = 7 - bend;
+      characterStroke(g, '#a88a5c', 0.55, p => { p.moveTo(4 + bend, -8 + bend * 1.2); p.lineTo(toolX, -0.4); });
+      characterShape(g, '#80959b', p => { p.moveTo(toolX - 1.1, -1.5); p.lineTo(toolX + 1.3, -1.7); p.quadraticCurveTo(toolX + 2, 0.3, toolX + 0.1, 0.8); p.quadraticCurveTo(toolX - 1.1, 0.1, toolX - 1.1, -1.5); });
+      characterStroke(g, '#b8c6c1', 0.22, p => { p.moveTo(toolX, -1.3); p.lineTo(toolX + 0.3, 0.2); });
+      if (Math.sin(motion * 4) > 0.7) characterOval(g, actor.activity === 'shovel' ? '#e2edf0' : '#73573c', 8.8 - bend, -2.5, 1.3, 0.65, -0.4);
+    }
+  }
+
+  function characterSleepingDog(g, actor, motion) {
+    const breathing = Math.sin(motion * 1.4 + actor.offset) * 0.08;
+    const fur = characterCoat(g, actor.coat, -4, -5, 4, 0);
+    characterOval(g, fur, -0.6, -2.1, 4.3, 2.3 + breathing);
+    characterOval(g, actor.patch, -1.6, -1.5, 2.5, 1.4);
+    characterStroke(g, actor.coat, 1.6, p => { p.moveTo(-3.5, -2); p.bezierCurveTo(-6.4, -1.2, -3.4, 1.4, 0.7, -0.5); });
+    characterOval(g, fur, 2.9, -1.9, 2.3, 1.8);
+    characterOval(g, characterTone(actor.coat, '#443e37', 0.3), 1.9, -2.7, 0.8, 1.5, -0.3);
+    characterOval(g, actor.patch, 4.1, -1.2, 1.2, 0.75);
+    characterOval(g, '#303b37', 5, -1.4, 0.4, 0.35);
+    characterStroke(g, '#3d3f35', 0.23, p => { p.moveTo(3, -2.4); p.quadraticCurveTo(3.4, -2.1, 3.8, -2.45); });
+    characterStroke(g, actor.patch, 0.8, p => { p.moveTo(1.2, -0.4); p.lineTo(3.3, -0.2); });
+  }
+
+  function characterAnimal(g, actor, motion, stride, hop) {
+    const kind = actor.kind;
+    const bear = kind === 'bear', deer = kind === 'deer', hare = kind === 'hare', cat = kind === 'cat', fox = kind === 'fox';
+    const body = bear ? 10 : deer ? 9 : hare ? 5 : 7;
+    const height = bear ? 6 : 4;
+    const legs = deer ? 6 : bear ? 3 : 2;
+    const base = -legs - hop;
+    const fur = characterCoat(g, actor.coat, -3, base - height * 1.1, 3, base + 1);
+    const dark = characterTone(actor.coat, '#23343c', 0.32);
+    // Tails are drawn behind bodies. Each species gets a distinct silhouette.
+    if (cat) {
+      characterStroke(g, dark, 1.15, p => { p.moveTo(-3.7, base - 1); p.bezierCurveTo(-7, base - 3, -6.8 + stride * 0.4, base - 7.8, -4.9, base - 6.8); });
+      characterStroke(g, actor.patch, 0.55, p => { p.moveTo(-5.8, base - 5.6); p.quadraticCurveTo(-5.9, base - 7.6, -4.9, base - 6.8); });
+    } else if (fox || kind === 'wolf') {
+      characterShape(g, fur, p => { p.moveTo(-3.2, base - 3); p.bezierCurveTo(-6.5, base - 3.6, -7.5, base + stride * 0.6, -10.4, base - 0.2); p.bezierCurveTo(-10, base + 2.7, -5.3, base + 1.6, -3.2, base - 0.8); p.closePath(); });
+      characterShape(g, actor.patch, p => { p.moveTo(-8, base + 0.3); p.quadraticCurveTo(-9.4, base + 0.2, -10.4, base - 0.2); p.quadraticCurveTo(-10.2, base + 2.4, -7.8, base + 1.4); p.closePath(); });
+    } else if (kind === 'dog') {
+      characterStroke(g, fur, 1.45, p => { p.moveTo(-3.5, base - 1.8); p.bezierCurveTo(-5.5, base - 2, -6.2, base - 5 + Math.sin(motion * 7) * 0.8, -5, base - 4.7 + Math.sin(motion * 7) * 0.8); });
+    } else if (hare || deer) characterOval(g, actor.patch, -body * 0.57, base - 1.4, hare ? 1.3 : 0.7, hare ? 1.25 : 1.7, deer ? 0.6 : 0);
+    else characterOval(g, dark, -5.9, base - 2, 0.9, 0.8);
+    for (let leg = 0; leg < 4; leg++) {
+      const side = leg % 2 ? 1 : -1;
+      const x = (leg < 2 ? -1 : 1) * (body * 0.37);
+      const swing = stride * side * (deer ? 1.1 : hare ? 1.5 : 0.9);
+      characterStroke(g, leg % 2 ? dark : actor.coat, bear ? 1.75 : deer ? 0.7 : hare ? 1.15 : 0.85, p => {
+        p.moveTo(x, base - 0.2); p.quadraticCurveTo(x + swing * 0.6, base + legs * 0.5, x + swing, -hop - 0.25);
+      });
+      characterOval(g, deer ? '#39453e' : dark, x + swing + 0.25, -hop, deer ? 0.65 : bear ? 1.2 : 0.75, 0.35);
+    }
+    characterOval(g, fur, 0, base - height * 0.48, body * 0.64, height * 0.7, bear ? -0.07 : 0);
+    if (deer) {
+      characterShape(g, fur, p => { p.moveTo(1.6, base - 2.2); p.bezierCurveTo(3.3, base - 5, 3.1, base - 9, 5.3, base - 10); p.quadraticCurveTo(7, base - 10.1, 6.5, base - 7.7); p.lineTo(5.4, base - 0.8); p.closePath(); });
+      characterOval(g, actor.patch, 4.7, base - 4.8, 0.55, 3.3, 0.24);
+      characterOval(g, fur, 6.6, base - 9.2, 2.7, 1.55, 0.15);
+      characterOval(g, '#303c38', 8.95, base - 8.9, 0.48, 0.38);
+      characterOval(g, '#202f2e', 7.4, base - 9.7, 0.23, 0.26);
+      characterOval(g, actor.coat, 4.1, base - 10.8, 1.8, 0.7, 0.65);
+      characterOval(g, actor.patch, 4.1, base - 10.9, 1.2, 0.28, 0.65);
+      characterOval(g, actor.coat, 7.1, base - 11.3, 1.6, 0.6, -0.8);
+      for (const side of [-1, 1]) {
+        const root = side < 0 ? 5 : 6.5;
+        characterStroke(g, '#c5b891', 0.43, p => {
+          p.moveTo(root, base - 10.6); p.quadraticCurveTo(root + side * 1.6, base - 12.7, root + side * 2.4, base - 15.3);
+          p.moveTo(root + side * 1.2, base - 12.7); p.lineTo(root + side * 3.4, base - 14);
+          p.moveTo(root + side * 1.9, base - 14); p.lineTo(root + side * 0.8, base - 15.4);
+        });
+      }
+      for (let i = 0; i < 4; i++) characterOval(g, '#d3c298', -2 + i * 1.3, base - 2.1 - (i % 2) * 0.4, 0.32, 0.2);
+      return;
+    }
+    const head = body * 0.52;
+    const headY = base - height;
+    if (hare) {
+      characterOval(g, fur, head - 0.5, headY - 2.2, 0.8, 3.7, -0.2 + stride * 0.045);
+      characterOval(g, actor.patch, head - 0.5, headY - 2.3, 0.3, 2.7, -0.2 + stride * 0.045);
+      characterOval(g, fur, head + 0.9, headY - 1.5, 0.7, 3.2, 0.2);
+      characterOval(g, '#d7b5aa', head + 0.9, headY - 1.6, 0.25, 2.2, 0.2);
+    } else if (bear) {
+      characterOval(g, dark, head - 1.2, headY - 1.6, 1, 1);
+      characterOval(g, actor.patch, head - 1.2, headY - 1.6, 0.5, 0.55);
+      characterOval(g, dark, head + 1.1, headY - 1.6, 0.85, 0.85);
+    } else if (kind !== 'dog') {
+      for (const earX of [head - 1.1, head + 1]) {
+        characterShape(g, fur, p => { p.moveTo(earX - 0.8, headY - 0.8); p.lineTo(earX - 0.5, headY - (cat ? 3 : 3.4)); p.quadraticCurveTo(earX + 0.4, headY - 2.9, earX + 0.9, headY - 0.4); p.closePath(); });
+        characterStroke(g, fox ? '#53473c' : actor.patch, 0.4, p => { p.moveTo(earX - 0.3, headY - 1.1); p.lineTo(earX - 0.3, headY - 2.4); });
+      }
+    }
+    characterOval(g, fur, head, headY, bear ? 2.7 : hare ? 2.15 : 2.1, bear ? 2.4 : 1.9);
+    if (kind === 'dog') characterOval(g, dark, head - 1.2, headY + 0.1, 0.95, 2.25, -0.28 + stride * 0.05);
+    if (cat) {
+      for (let i = 0; i < 3; i++) characterStroke(g, actor.patch, 0.5, p => { p.moveTo(-2 + i * 1.3, base - 4.1); p.quadraticCurveTo(-2.3 + i * 1.3, base - 3, -1.7 + i * 1.3, base - 2.5); });
+    } else if (kind === 'dog') characterOval(g, actor.patch, -1, base - 2, 1.8, 1.8);
+    if (fox) characterShape(g, actor.patch, p => { p.moveTo(head - 1.5, headY + 0.1); p.quadraticCurveTo(head + 0.2, headY + 1.1, head + 2.8, headY + 0.4); p.lineTo(head + 1.3, headY + 2); p.closePath(); });
+    const muzzleX = head + (kind === 'wolf' ? 2.15 : bear ? 1.9 : hare ? 1.3 : 1.6);
+    characterOval(g, actor.patch, muzzleX, headY + 0.7, bear ? 1.4 : kind === 'wolf' ? 1.6 : 1.1, bear ? 1.1 : 0.7);
+    characterOval(g, '#2c3736', muzzleX + (bear ? 0.9 : 0.75), headY + 0.4, 0.38, 0.3);
+    characterOval(g, '#202e2d', head + 0.65, headY - 0.5, 0.23, 0.28);
+    characterOval(g, '#e9e1c8', head + 0.7, headY - 0.58, 0.07, 0.08);
+    if (cat || hare) {
+      for (const dy of [-0.3, 0.4]) characterStroke(g, actor.patch, 0.14, p => { p.moveTo(muzzleX, headY + 0.9); p.lineTo(muzzleX + 1.9, headY + 0.8 + dy); });
+    }
+    if (kind === 'dog') characterStroke(g, '#c77e6c', 0.4, p => { p.moveTo(muzzleX + 0.6, headY + 1.1); p.lineTo(muzzleX + 0.65, headY + 1.65); });
+  }
+
+  function drawCampfireHD(g, fire, motion) {
+    const { x, y, flame, embers } = fire;
+    g.save();
+    g.translate(x, y);
+    characterOval(g, '#35413c', 0, 0, 6.5, 2.7);
+    for (let i = 0; i < 8; i++) {
+      const a = i * Math.PI / 4;
+      const stone = g.createLinearGradient(0, -3, 0, 3);
+      stone.addColorStop(0, '#9b9c87'); stone.addColorStop(1, '#58655c');
+      characterOval(g, stone, Math.cos(a) * 5.8, Math.sin(a) * 2.1, 1.25, 0.9, a * 0.3);
+    }
+    characterStroke(g, '#6d4e36', 1.75, p => { p.moveTo(-3.5, -1.3); p.lineTo(3.7, 1); });
+    characterStroke(g, '#493b30', 1.75, p => { p.moveTo(-3.1, 1.3); p.lineTo(3.6, -1.2); });
+    characterOval(g, '#ac8253', 3.7, 1, 0.75, 0.85);
+    if (embers > 0) {
+      g.globalAlpha *= embers * (0.8 + Math.sin(motion * 5) * 0.1);
+      characterOval(g, '#d15e2d', 0, -0.2, 3.5, 1.2);
+      characterOval(g, '#f3ae55', -0.8, -0.5, 1.7, 0.65);
+      g.globalAlpha = fire.alpha === undefined ? 1 : fire.alpha;
+    }
+    if (flame > 0.01) {
+      for (let tongue = 0; tongue < 4; tongue++) {
+        const dx = tongue * 1.5 - 2.2;
+        const wave = Math.sin(motion * (8 + tongue * 2.7) + tongue * 2);
+        const height = (5.5 + (wave + 1) * 1.8 + (tongue === 1 ? 3 : 0)) * flame;
+        const gradient = g.createLinearGradient(0, -height, 0, 0);
+        gradient.addColorStop(0, '#e77838'); gradient.addColorStop(0.6, '#ffb34e'); gradient.addColorStop(1, '#fff1b8');
+        characterShape(g, gradient, p => { p.moveTo(dx - 1.8, 0); p.bezierCurveTo(dx - 3, -height * 0.4, dx + wave + 0.7, -height * 0.6, dx + wave, -height); p.bezierCurveTo(dx + 3, -height * 0.5, dx + 3.1, -height * 0.1, dx + 1.8, 0); p.closePath(); });
+      }
+      characterOval(g, '#fff3bd', 0, -1.2, 1.9, 1.1);
+      for (let spark = 0; spark < 4; spark++) {
+        const age = wrap(motion * 0.65 + spark * 0.27, 1);
+        g.globalAlpha = (1 - age) * flame * 0.7;
+        characterOval(g, '#ffd28b', Math.sin(motion + spark) * 3 + Math.sin(age * 8 + spark), -5 - age * 14, 0.16, 0.35);
+      }
+    }
+    g.restore();
+  }
+
+  function drawFlyingBirdHD(g, species, colors, wing, bank) {
+    g.save();
+    const stork = species === 'stork';
+    const small = species === 'tit' || species === 'sparrow';
+    const owl = flyingSpecies[species].night;
+    const span = small ? 4 : species === 'gull' ? 7 : stork ? 8 : 6;
+    const lift = wing * (small ? 3 : 4.5);
+    const featherCount = owl ? 5 : 4;
+    // Curved wings retain real feathered trailing edges during both halves of a wingbeat.
+    for (const side of [-1, 1]) {
+      const tipY = -lift - bank * side * 2;
+      const gradient = g.createLinearGradient(0, 0, side * span, tipY);
+      gradient.addColorStop(0, colors.wing); gradient.addColorStop(0.65, colors.wing); gradient.addColorStop(1, colors.tip);
+      characterShape(g, gradient, p => {
+        p.moveTo(-0.9, 0.6);
+        p.bezierCurveTo(side * span * 0.23, tipY * 0.8 - 1.4, side * span * 0.72, tipY - 1.3, side * (span + 0.6), tipY);
+        for (let i = 0; i < featherCount; i++) {
+          const t = 1 - i / featherCount;
+          p.quadraticCurveTo(side * span * (t - 0.02), tipY * t + 1.7, side * span * (t - 0.15), tipY * (t - 0.12) + 1.5);
+        }
+        p.quadraticCurveTo(0, 2.2, -0.9, 0.6); p.closePath();
+      });
+      characterStroke(g, colors.belly, 0.25, p => { p.moveTo(0, -0.3); p.quadraticCurveTo(side * span * 0.45, tipY - 0.4, side * span * 0.87, tipY + 0.2); });
+      if (species === 'pigeon') {
+        for (const t of [0.52, 0.7]) characterStroke(g, colors.tip, 0.42, p => { p.moveTo(side * span * t, tipY * t - 0.4); p.lineTo(side * span * (t - 0.1), tipY * t + 1.3); });
+      }
+    }
+    characterShape(g, colors.tip, p => { p.moveTo(-1.5, 0.4); p.quadraticCurveTo(-3.3, 0.5, -5.7, 2.3); p.lineTo(-4.1, 2.3); p.lineTo(-4.4, 3); p.quadraticCurveTo(-2.5, 2.1, -1.1, 1.9); p.closePath(); });
+    characterOval(g, colors.body, 0.1, 0.9, owl ? 3.1 : 2.9, owl ? 1.7 : 1.2);
+    characterOval(g, colors.belly, 0.65, 1.45, 1.9, 0.65);
+    if (stork) {
+      characterStroke(g, colors.body, 1.3, p => { p.moveTo(1.8, 0.3); p.bezierCurveTo(3.9, 0.8, 3.3, -2.6, 5.3, -2.6); });
+      characterOval(g, colors.belly, 5.5, -2.5, 1.5, 0.9);
+      characterShape(g, colors.beak, p => { p.moveTo(6.7, -2.8); p.lineTo(10.8, -2.15); p.lineTo(6.5, -2); p.closePath(); });
+      characterStroke(g, colors.beak, 0.3, p => { p.moveTo(-1.8, 1.5); p.lineTo(-7, 3.5); p.lineTo(-8.2, 3.2); p.moveTo(-1.2, 1.9); p.lineTo(-6.5, 4.1); p.lineTo(-7.6, 3.8); });
+      characterOval(g, colors.tip, 6, -2.65, 0.16, 0.18);
+    } else {
+      characterOval(g, colors.body, 2.7, -0.5, owl ? 1.8 : 1.3, owl ? 1.8 : 1.35);
+      characterShape(g, colors.beak, p => { p.moveTo(3.6, -0.8); p.lineTo(owl ? 5 : small ? 4.9 : 5.5, -0.3); p.lineTo(3.7, 0.05); p.closePath(); });
+      if (species === 'tit') {
+        characterOval(g, colors.tip, 2.9, -1, 1.25, 1);
+        characterOval(g, colors.belly, 3.25, -0.4, 0.64, 0.46);
+        characterStroke(g, colors.tip, 0.5, p => { p.moveTo(2, 0.5); p.lineTo(1.9, 1.8); });
+      }
+      if (species === 'sparrow') {
+        characterStroke(g, colors.belly, 0.3, p => { p.moveTo(1.9, -1.3); p.quadraticCurveTo(3, -1.8, 3.7, -1); });
+        characterOval(g, colors.tip, 3.2, -0.1, 0.4, 0.35);
+      }
+      if (species === 'pigeon') characterOval(g, '#648c85', 1.7, 0.25, 0.75, 1.1, -0.4);
+      if (owl) {
+        characterOval(g, colors.belly, 2.7, -0.35, 1.35, 1.25);
+        characterOval(g, colors.body, 2.7, -0.35, 0.4, 1.1);
+        characterOval(g, colors.tip, 3.3, -0.55, 0.24, 0.35);
+        characterOval(g, colors.tip, 2, -0.55, 0.2, 0.3);
+        for (let i = 0; i < 3; i++) characterOval(g, colors.tip, -0.6 + i * 1.05, 1.3, 0.15, 0.3);
+        if (species === 'eagleOwl') {
+          characterShape(g, colors.body, p => { p.moveTo(1.4, -1.6); p.lineTo(1.3, -3.6); p.lineTo(2.4, -1.8); p.moveTo(3, -1.9); p.lineTo(4.2, -3.2); p.lineTo(4.1, -1.1); p.closePath(); });
+        }
+      } else characterOval(g, colors.tip, 3.2, -0.85, 0.16, 0.2);
+    }
+    g.restore();
+  }
+
+  function drawBatHD(g, colors, wing, bank) {
+    g.save();
+    const lift = wing * 4.8;
+    for (const side of [-1, 1]) {
+      const tilt = bank * side * 2;
+      const tip = -lift + tilt;
+      const membrane = g.createLinearGradient(0, -1, side * 7, tip);
+      membrane.addColorStop(0, colors.body); membrane.addColorStop(0.6, colors.wing); membrane.addColorStop(1, colors.tip);
+      characterShape(g, membrane, p => {
+        p.moveTo(0, 0); p.quadraticCurveTo(side * 3, -3.5, side * 7.2, tip - 0.7);
+        p.quadraticCurveTo(side * 5.8, tip + 1.5, side * 5.6, 2.7 + tilt);
+        p.quadraticCurveTo(side * 4.3, 0.4 + tilt, side * 3.8, 3.4 + tilt);
+        p.quadraticCurveTo(side * 2.4, 1.5, side * 1.5, 4.1);
+        p.quadraticCurveTo(side * 1.1, 2, 0, 1); p.closePath();
+      }, colors.tip, 0.25);
+      characterStroke(g, colors.belly, 0.22, p => {
+        p.moveTo(side * 0.5, 0); p.quadraticCurveTo(side * 3, -2.4, side * 7, tip - 0.5);
+        p.moveTo(side * 2, -0.7); p.lineTo(side * 5.6, 2.5 + tilt);
+        p.moveTo(side * 1.2, 0); p.lineTo(side * 3.8, 3.3 + tilt);
+      });
+    }
+    characterOval(g, colors.body, 0, 1, 1.15, 2.5);
+    characterOval(g, colors.belly, 0.25, 1.3, 0.55, 1.5);
+    characterShape(g, colors.body, p => { p.moveTo(-1, -1); p.lineTo(-1.5, -3.5); p.quadraticCurveTo(-0.3, -3.3, 0, -1.5); p.quadraticCurveTo(0.7, -3.2, 1.5, -3); p.lineTo(1.2, -0.6); p.closePath(); });
+    characterOval(g, colors.tip, 0, -0.5, 1.3, 1.15);
+    characterOval(g, '#d9b49b', 0.55, -0.55, 0.16, 0.2);
+    characterStroke(g, colors.tip, 0.35, p => { p.moveTo(0, 2.9); p.lineTo(-0.2, 4.9); });
+    g.restore();
   }
 
   // Each row is a sixteenth note. Instruments and effects are synthesized locally.
@@ -3446,7 +4577,7 @@
     world = generateWorld(code);
     world.population = createGroundPopulation(world);
     world.flocks = createFlocks(code);
-    world.cloudLayers = generateCloudLayers(code);
+    world.cloudLayers = renderMode === 'hd' ? generateCloudLayersHD(code) : generateCloudLayersPixel(code);
     world.festivalTree = createFestivalTree(world);
     const fragment = '#' + encodeURIComponent(code);
     if (location.hash !== fragment) {
@@ -3593,6 +4724,30 @@
     if (event.code === 'KeyH') toggleInterface();
   });
 
+  for (const button of document.querySelectorAll('[data-render]')) {
+    button.addEventListener('click', () => {
+      if (renderMode === button.dataset.render) return;
+      renderMode = button.dataset.render;
+      try { localStorage.setItem('village-render', renderMode); } catch {}
+      configureRenderer();
+      rebuildArtwork();
+      render();
+      resetClock();
+    });
+  }
+  let resizeTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (desiredRenderScale() === renderScale) return;
+      configureRenderer();
+      rebuildArtwork();
+      render();
+      resetClock();
+    }, 180);
+  });
+
+  configureRenderer();
   selectVillage(codeFromUrl() || freshCode());
 })();
 </script>
