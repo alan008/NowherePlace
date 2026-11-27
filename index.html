@@ -277,6 +277,10 @@
     const layer = document.createElement('canvas');
     return prepareSurface(layer, width, height, scale);
   }
+  function releaseSurface(surface) {
+    // Release the backing pixels before allocating the replacement artwork.
+    surface.width = 0;
+  }
   function blit(g, source, x, y) {
     g.drawImage(source, x, y, source.logicalWidth || source.width, source.logicalHeight || source.height);
   }
@@ -1702,6 +1706,7 @@
   }
 
   function maskForeground(g, world, actors, depth, motion) {
+    world.foregroundMasks ??= buildForegroundMasks(world, landArtwork(world, 'night').sprites);
     g.globalCompositeOperation = 'destination-out';
     blit(g, world.foregroundMasks.get(depth), 0, 0);
     for (const actor of actors) {
@@ -1801,6 +1806,8 @@
         blit(out, highlight, 0, 0);
       }
     }
+    releaseSurface(silhouette);
+    releaseSurface(highlight);
     return masks;
   }
 
@@ -2027,15 +2034,6 @@
     drawClouds(clouds, sun, darkness, weather.rain);
   }
 
-  function drawLandLayer(layers, light, part) {
-    blit(landContext, layers[light.from][part], 0, 0);
-    if (light.from !== light.to && light.blend > 0) {
-      landContext.globalAlpha = light.blend;
-      blit(landContext, layers[light.to][part], 0, 0);
-      landContext.globalAlpha = 1;
-    }
-  }
-
   function castHouseShadow(item, dx, dy, ink) {
     const { left, right, peak, wall, roof, depth, rise } = dimensions(item);
     const project = (x, y, height) => [item.x + x * item.face + dx * height, item.y + y + dy * height];
@@ -2147,9 +2145,16 @@
     landContext.globalCompositeOperation = 'source-over';
   }
 
-  function drawLand(world, layers, light, hour, motion, weather, clouds, sun, moon) {
+  function drawLand(world, light, hour, motion, weather, clouds, sun, moon) {
+    const from = landArtwork(world, light.from);
+    const to = light.from !== light.to && light.blend > 0 ? landArtwork(world, light.to) : null;
     landContext.clearRect(0, 0, W, H);
-    drawLandLayer(layers, light, 'terrain');
+    blit(landContext, from.terrain, 0, 0);
+    if (to) {
+      landContext.globalAlpha = light.blend;
+      blit(landContext, to.terrain, 0, 0);
+      landContext.globalAlpha = 1;
+    }
     drawFlocks(landContext, world, hour, motion, weather, sun, moon);
     const actors = groundPopulation(world, motion, hour);
     updateFootprints(world, actors, motion);
@@ -2157,13 +2162,13 @@
     drawCastShadows(world, sun);
     let nextActor = 0;
     for (let i = 0; i < world.sceneItems.length; i++) {
-      const sprite = layers[light.from].sprites[i];
+      const sprite = from.sprites[i];
       while (nextActor < actors.length && actors[nextActor].y <= sprite.y) {
         drawGroundActor(landContext, actors[nextActor++], motion);
       }
       blit(landContext, sprite.canvas, sprite.left, sprite.top);
-      if (light.from !== light.to && light.blend > 0) {
-        const other = layers[light.to].sprites[i];
+      if (to) {
+        const other = to.sprites[i];
         landContext.globalAlpha = light.blend;
         blit(landContext, other.canvas, other.left, other.top);
         landContext.globalAlpha = 1;
@@ -2172,6 +2177,7 @@
     while (nextActor < actors.length) drawGroundActor(landContext, actors[nextActor++], motion);
     gradeLandscape(sun, moon, clouds, weather, hour);
     if (moon.direct > 0.005) {
+      world.moonMasks ??= paintMoonlight(world);
       const tint = moon.direct * 0.84;
       landContext.globalAlpha = tint * (1 - moon.right);
       blit(landContext, world.moonMasks[0], 0, 0);
@@ -3566,8 +3572,7 @@
     if (item.kind === 'festivalTree') drawTreeDecorationsHD(g, item, palette);
   }
 
-  function generateCloudLayersHD(code) {
-    const base = generateCloudLayersPixel(code);
+  function generateCloudLayersHD(code, base) {
     const random = randomFrom(hash(code + '/hd-clouds'));
     return base.map((layer, type) => {
       if (!layer) return null;
@@ -3607,6 +3612,7 @@
       const data = sg.getImageData(0, 0, CLOUD_TILE, SKY_HEIGHT).data;
       const opacity = new Uint8Array(CLOUD_TILE * SKY_HEIGHT);
       for (let i = 0; i < opacity.length; i++) opacity[i] = data[i * 4 + 3];
+      releaseSurface(sample);
       return {canvas: surface, opacity, speed: layer.speed};
     });
   }
@@ -3732,7 +3738,8 @@
   function desiredRenderScale() {
     if (renderMode === 'pixel') return 1;
     const display = Math.min(window.innerWidth / W, window.innerHeight / H);
-    return clamp(Math.ceil(display * (window.devicePixelRatio || 1)), 2, 4);
+    const maxScale = window.matchMedia('(pointer: coarse)').matches ? 2 : 4;
+    return clamp(Math.ceil(display * (window.devicePixelRatio || 1)), 2, maxScale);
   }
 
   function configureRenderer() {
@@ -3745,14 +3752,47 @@
     for (const button of document.querySelectorAll('[data-render]')) button.setAttribute('aria-pressed', String(button.dataset.render === renderMode));
   }
 
-  function rebuildArtwork() {
-    // Preserve the simulation, tracks, time, weather and population when changing only the artwork.
-    world.festivalTree.glows = null;
-    world.cloudLayers = renderMode === 'hd' ? generateCloudLayersHD(world.code) : generateCloudLayersPixel(world.code);
-    world.moonMasks = paintMoonlight(world);
-    layers = Object.fromEntries(Object.entries(seasonalColors).map(([phase, palette]) => [phase, paintLand(world, palette)]));
-    world.foregroundMasks = buildForegroundMasks(world, layers.night.sprites);
+  function releaseTerrainArtwork() {
+    for (const { terrain, sprites } of Object.values(layers)) {
+      releaseSurface(terrain);
+      for (const { canvas } of sprites) releaseSurface(canvas);
+    }
+    if (world.moonMasks) {
+      for (const mask of world.moonMasks) releaseSurface(mask);
+      world.moonMasks = null;
+    }
+    if (world.foregroundMasks) {
+      for (const mask of world.foregroundMasks.values()) releaseSurface(mask);
+      world.foregroundMasks = null;
+    }
+    layers = {};
     shadowPosition = -1;
+  }
+
+  function releaseCloudArtwork(cloudLayers) {
+    for (const layer of cloudLayers) {
+      if (layer) releaseSurface(layer.canvas);
+    }
+  }
+
+  function releaseModeArtwork() {
+    releaseTerrainArtwork();
+    if (world.cloudLayers !== world.pixelCloudLayers) releaseCloudArtwork(world.cloudLayers);
+    if (world.festivalTree.glows) {
+      for (const glow of world.festivalTree.glows) releaseSurface(glow);
+    }
+    world.festivalTree.glows = null;
+  }
+
+  function buildCloudArtwork() {
+    world.cloudLayers = renderMode === 'hd'
+      ? generateCloudLayersHD(world.code, world.pixelCloudLayers)
+      : world.pixelCloudLayers;
+  }
+
+  function landArtwork(world, phase) {
+    // Prepare each lighting phase when it first contributes to the frame.
+    return layers[phase] ??= paintLand(world, seasonalColors[phase]);
   }
 
   // Smooth illustrated inhabitants. All coordinates remain in the 480 × 270 world.
@@ -4501,7 +4541,7 @@
   });
 
   let world;
-  let layers;
+  let layers = {};
   let simulatedMinutes = START_HOUR * 60;
   let motion = 0;
   let paused = false;
@@ -4524,7 +4564,7 @@
     const sun = sunlightAt(world, hour, weather, clouds);
     const moon = moonlightAt(world, hour, weather, clouds);
     drawSky(world, light, motion, weather, clouds, sun, moon);
-    drawLand(world, layers, light, hour, motion, weather, clouds, sun, moon);
+    drawLand(world, light, hour, motion, weather, clouds, sun, moon);
     const minutes = Math.floor(simulatedMinutes);
     if (clock.valueAsNumber !== minutes) clock.value = minutes;
     const display = [Math.floor(minutes / 60), minutes % 60].map(value => String(value).padStart(2, '0')).join(':');
@@ -4574,10 +4614,15 @@
   }
 
   function selectVillage(code) {
+    if (world) {
+      releaseModeArtwork();
+      releaseCloudArtwork(world.pixelCloudLayers);
+    }
     world = generateWorld(code);
     world.population = createGroundPopulation(world);
     world.flocks = createFlocks(code);
-    world.cloudLayers = renderMode === 'hd' ? generateCloudLayersHD(code) : generateCloudLayersPixel(code);
+    world.pixelCloudLayers = generateCloudLayersPixel(code);
+    buildCloudArtwork();
     world.festivalTree = createFestivalTree(world);
     const fragment = '#' + encodeURIComponent(code);
     if (location.hash !== fragment) {
@@ -4592,15 +4637,11 @@
   }
 
   function rebuildSeason() {
+    releaseTerrainArtwork();
     world.sceneItems = season === 'winter' ? [...world.items, world.festivalTree].sort((a, b) => a.y - b.y) : world.items;
     seasonalColors = Object.fromEntries(Object.entries(colors).map(([phase, base]) =>
       [phase, seasonalPalette(base, phase)]));
     world.seasonEffects = createSeasonEffects(world);
-    world.moonMasks = paintMoonlight(world);
-    layers = Object.fromEntries(Object.entries(seasonalColors).map(([phase, palette]) =>
-      [phase, paintLand(world, palette)]));
-    world.foregroundMasks = buildForegroundMasks(world, layers.night.sprites);
-    shadowPosition = -1;
     weatherPicker.querySelector('option[value="rain"]').textContent = season === 'winter' ? 'Снег' : 'Дождь';
   }
 
@@ -4724,15 +4765,20 @@
     if (event.code === 'KeyH') toggleInterface();
   });
 
+  function refreshRenderer() {
+    releaseModeArtwork();
+    configureRenderer();
+    buildCloudArtwork();
+    render();
+    resetClock();
+  }
+
   for (const button of document.querySelectorAll('[data-render]')) {
     button.addEventListener('click', () => {
       if (renderMode === button.dataset.render) return;
       renderMode = button.dataset.render;
       try { localStorage.setItem('village-render', renderMode); } catch {}
-      configureRenderer();
-      rebuildArtwork();
-      render();
-      resetClock();
+      refreshRenderer();
     });
   }
   let resizeTimer;
@@ -4740,10 +4786,7 @@
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       if (desiredRenderScale() === renderScale) return;
-      configureRenderer();
-      rebuildArtwork();
-      render();
-      resetClock();
+      refreshRenderer();
     }, 180);
   });
 
