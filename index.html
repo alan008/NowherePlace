@@ -260,8 +260,10 @@
   const byId = id => document.getElementById(id);
   const canvas = byId('landscape');
   const ctx = canvas.getContext('2d', { alpha: false });
+  const androidDevice = /\bAndroid\b/i.test(navigator.userAgent) || navigator.userAgentData?.platform === 'Android';
   let renderMode = 'hd';
   try { renderMode = localStorage.getItem('village-render') === 'pixel' ? 'pixel' : 'hd'; } catch {}
+  const androidHD = () => androidDevice && renderMode === 'hd';
   let renderScale = 1;
   function prepareSurface(surface, width, height, scale = renderScale) {
     surface.width = Math.ceil(width * scale);
@@ -275,6 +277,7 @@
   }
   function makeCanvas(width = W, height = H, scale = renderScale) {
     const layer = document.createElement('canvas');
+    if (androidHD()) layer.addEventListener('contextrestored', restoreAndroidRenderer);
     return prepareSurface(layer, width, height, scale);
   }
   function releaseSurface(surface) {
@@ -286,6 +289,10 @@
   }
   const landCanvas = makeCanvas();
   const landContext = landCanvas.getContext('2d');
+  if (androidDevice) {
+    canvas.addEventListener('contextrestored', restoreAndroidRenderer);
+    landCanvas.addEventListener('contextrestored', restoreAndroidRenderer);
+  }
   const shadowCanvas = makeCanvas();
   const shadowContext = shadowCanvas.getContext('2d');
   const cloudCanvas = makeCanvas(W, SKY_HEIGHT);
@@ -1720,6 +1727,7 @@
     const ground = terrain.getContext('2d');
     drawDistantLand(ground, world, palette);
     drawMeadow(ground, world, palette);
+    if (androidHD()) return { terrain, sprites: paintAndroidScenery(world, palette) };
     const sprites = world.sceneItems.map(item => {
       let half = (item.width || item.size || 8) + 7;
       let height = (item.height || item.size || 10) + 8;
@@ -1747,6 +1755,22 @@
       return { canvas, left, top, y: item.y };
     });
     return { terrain, sprites };
+  }
+
+  function paintAndroidScenery(world, palette) {
+    // A few depth bands keep characters behind nearer scenery with a bounded canvas count.
+    let nextItem = 0;
+    return [170, 195, 220, 245, Infinity].map(bottom => {
+      const canvas = makeCanvas(W, Math.min(bottom + 12, H));
+      const g = canvas.getContext('2d');
+      const houses = [];
+      while (nextItem < world.sceneItems.length && world.sceneItems[nextItem].y <= bottom) {
+        const item = world.sceneItems[nextItem++];
+        drawPropHD(g, item, palette);
+        if (item.kind === 'house' && item.style !== 'shed') houses.push(item);
+      }
+      return { canvas, y: Math.min(bottom, H) - 10, houses };
+    });
   }
 
   function paintMoonlight(world) {
@@ -1874,6 +1898,7 @@
     [-0.7, -0.7], [0.7, 0.7], [-0.7, 0.7], [0.7, -0.7]];
 
   function lightThroughClouds(clouds, x, y, radius) {
+    if (androidHD()) return 1 - clouds.coverage * 0.88;
     return aperturePoints.reduce((sum, [dx, dy]) =>
       sum + cloudLight(clouds, x + dx * radius, y + dy * radius), 0) / aperturePoints.length;
   }
@@ -2145,7 +2170,87 @@
     landContext.globalCompositeOperation = 'source-over';
   }
 
+  function drawAndroidLand(world, light, hour, motion, weather, clouds, sun, moon) {
+    const { terrain, sprites } = world.androidLandscape ??= paintLand(world, seasonalColors.day);
+    const g = landContext;
+    g.clearRect(0, 0, W, H);
+    blit(g, terrain, 0, 0);
+    drawFlocks(g, world, hour, motion, weather, sun, moon);
+    const actors = groundPopulation(world, motion, hour);
+    let nextActor = 0;
+    for (const { canvas, y, houses } of sprites) {
+      while (nextActor < actors.length && actors[nextActor].y <= y) {
+        drawGroundActorHD(g, actors[nextActor++], motion);
+      }
+      blit(g, canvas, 0, 0);
+      for (const house of houses) {
+        const strength = Math.max(smooth((hour - house.litAt) / 0.75), 1 - smooth((hour - house.goesDark) / 0.6));
+        if (strength <= 0) continue;
+        g.save();
+        g.translate(house.x, house.y);
+        g.scale(house.face, 1);
+        g.globalAlpha = strength;
+        g.fillStyle = '#fff0aa';
+        for (const { x, y, w, h } of houseWindows(house, dimensions(house))) g.fillRect(x, y, w, h);
+        g.restore();
+      }
+    }
+    while (nextActor < actors.length) drawGroundActorHD(g, actors[nextActor++], motion);
+    const shade = 0.61 * moon.darkness + 0.26 * clouds.coverage * (1 - moon.darkness);
+    g.globalCompositeOperation = 'source-atop';
+    g.fillStyle = translucent([19, 31, 57], shade);
+    g.fillRect(0, 0, W, H);
+    g.globalCompositeOperation = 'source-over';
+    blit(ctx, landCanvas, 0, 0);
+    drawChimneySmoke(world, motion, hour);
+
+    if (weather.fog > 0.02) {
+      const tint = skyColor(seasonalColors[light.from].mist, seasonalColors[light.to].mist, light.blend);
+      ctx.globalAlpha = weather.fog * 0.15;
+      for (let i = 0; i < world.atmosphere.fog.length; i += 2) {
+        const band = world.atmosphere.fog[i];
+        const x = wrap(band.x + motion * band.speed, W + 330) - 120;
+        hdOval(ctx, tint, x, band.y, band.width, band.depth);
+      }
+      ctx.globalAlpha = 1;
+    }
+    if (weather.rain > 0.02) drawAndroidPrecipitation(world, motion, weather.rain, moon.darkness);
+  }
+
+  function drawAndroidPrecipitation(world, motion, intensity, darkness) {
+    ctx.save();
+    if (season === 'winter') {
+      const snow = world.seasonEffects.snow;
+      ctx.fillStyle = '#edf3f6';
+      ctx.globalAlpha = 0.65 - darkness * 0.22;
+      for (let i = 0; i < snow.length * intensity; i += 4) {
+        const flake = snow[i];
+        const x = wrap(flake.x + motion * flake.drift + Math.sin(motion + flake.phase) * 4, W);
+        const y = wrap(flake.y + motion * flake.speed, H);
+        const size = mix(0.55, 1.6, flake.size);
+        ctx.fillRect(x, y, size, size);
+      }
+    } else {
+      const drops = world.atmosphere.drops;
+      ctx.globalAlpha = intensity * 0.46;
+      ctx.lineWidth = 0.6;
+      ctx.strokeStyle = '#d7e5ee';
+      ctx.beginPath();
+      for (let i = 0; i < drops.length; i += 3) {
+        const drop = drops[i];
+        const travel = motion * drop.speed;
+        const x = wrap(drop.x - travel * 0.36, W + 40) - 20;
+        const y = wrap(drop.y + travel, H + 32) - 16;
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - drop.length * 0.36, y + drop.length);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   function drawLand(world, light, hour, motion, weather, clouds, sun, moon) {
+    if (androidHD()) return drawAndroidLand(world, light, hour, motion, weather, clouds, sun, moon);
     const from = landArtwork(world, light.from);
     const to = light.from !== light.to && light.blend > 0 ? landArtwork(world, light.to) : null;
     landContext.clearRect(0, 0, W, H);
@@ -2285,7 +2390,9 @@
 
   function fallingLeaves(world, motion) {
     const light = lightingAt(simulatedMinutes / 60);
-    return world.seasonEffects.leaves.map(leaf => {
+    const leaves = world.seasonEffects.leaves;
+    const visible = androidHD() ? leaves.filter((_, i) => i % 3 === 0) : leaves;
+    return visible.map(leaf => {
       const age = wrap(motion + leaf.phase, leaf.period);
       const fall = clamp(age / (leaf.period * 0.7));
       const airborne = 1 - smooth((fall - 0.85) / 0.15);
@@ -2356,14 +2463,15 @@
 
   function drawChimneySmoke(world, motion, hour) {
     if (season !== 'winter' && !(season === 'autumn' && (hour < 9 || hour > 18))) return;
+    const puffs = androidHD() ? 2 : 4;
     for (const house of world.houses) {
       if (!houseStyles[house.style].chimney) continue;
       const d = dimensions(house);
       const localX = house.view === 'side' ? d.right - 8 : d.peak + Math.round(d.depth * 0.68) + 2;
       const x = house.x + localX * house.face;
       const y = house.y - d.wall - d.roof - d.rise - 7;
-      for (let puff = 0; puff < 4; puff++) {
-        const age = wrap(motion * 0.13 + puff * 0.25 + house.seed % 13, 1);
+      for (let puff = 0; puff < puffs; puff++) {
+        const age = wrap(motion * 0.13 + puff / puffs + house.seed % 13, 1);
         ctx.globalAlpha = (1 - age) * 0.15;
         ellipse(ctx, '#aab5c3', x + age * 13 + Math.sin(age * 6) * 2, y - age * 17,
           1 + age * 4, 1 + age * 2);
@@ -3021,6 +3129,8 @@
   function drawFlocks(g, world, hour, motion, weather, sun, moon) {
     if (season === 'winter') return;
     const daytime = smooth((hour - 5.4) / 1.2) * smooth((20.3 - hour) / 1.4);
+    const mobile = androidHD();
+    const stride = mobile ? 2 : 1;
     for (const flock of world.flocks) {
       const type = flyingSpecies[flock.species];
       const presence = type.night ? 1 - daytime : daytime;
@@ -3028,7 +3138,8 @@
       const flight = flockFlight(flock, motion);
       if (!flight.visible) continue;
       const shades = birdColors(type, sun, moon, weather.fog);
-      for (const member of flock.members) {
+      for (let i = 0; i < flock.members.length; i += stride) {
+        const member = flock.members[i];
         const pose = memberFlight(flock, member, flight, motion);
         if (pose.x < -22 || pose.x > W + 22) continue;
         const beat = motion * type.flap * Math.PI * 2 + member.phase;
@@ -3038,9 +3149,10 @@
         g.globalAlpha = presence * (1 - weather.rain * 0.27);
         g.translate(renderMode === 'hd' ? pose.x : Math.round(pose.x), renderMode === 'hd' ? pose.y : Math.round(pose.y));
         g.scale(pose.direction * pose.scale, pose.scale);
-        if (flock.species === 'bat') drawBat(g, shades, wing, pose.bank);
+        if (mobile) drawAndroidBird(g, flock.species, shades, wing, pose.bank);
+        else if (flock.species === 'bat') drawBat(g, shades, wing, pose.bank);
         else drawFlyingBird(g, flock.species, shades, wing, pose.bank);
-        if (type.night && flock.species !== 'bat') {
+        if (!mobile && type.night && flock.species !== 'bat') {
           const blink = wrap(motion + member.eyeOffset, member.eyePeriod);
           if (blink < 0.14 || (blink > 0.31 && blink < 0.39)) {
             g.globalAlpha = presence * 0.85;
@@ -3148,7 +3260,8 @@
     hdPath(g, ground, p => { hdSmooth(p, edge); p.lineTo(W, H); p.lineTo(0, H); p.closePath(); });
     g.save();
     hdPath(g, null, p => { hdSmooth(p, edge); p.lineTo(W, H); p.lineTo(0, H); p.closePath(); }); g.clip();
-    for (let i = 0; i < 100; i++) {
+    const patches = androidHD() ? 36 : 100;
+    for (let i = 0; i < patches; i++) {
       const x = between(random, -30, W + 30), y = between(random, 145, H + 8);
       g.globalAlpha = between(random, 0.035, 0.12);
       hdOval(g, pick(random, palette.grass), x, y, between(random, 10, 65), between(random, 1.5, 7));
@@ -3183,7 +3296,8 @@
         }
       }
     }
-    for (let i = 0; i < 2200; i++) {
+    const details = androidHD() ? 420 : 2200;
+    for (let i = 0; i < details; i++) {
       const x = between(random, 0, W), y = between(random, 143, H);
       if (y < world.fringe(x) + 1 || world.gardens.some(a => x > a.left && x < a.right && y > a.top && y < a.bottom)) continue;
       const depth = clamp((y - 141) / 129), path = world.paths.mask[Math.floor(y) * W + Math.floor(x)];
@@ -3211,7 +3325,8 @@
       g.globalAlpha = 0.8;
       for (const tree of world.items.filter(item => item.kind === 'leaf')) {
         const leaves = randomFrom(tree.seed), shades = treeLeafColors(tree, palette);
-        for (let i = 0; i < tree.height * 1.4; i++) {
+        const leafCount = tree.height * (androidHD() ? 0.35 : 1.4);
+        for (let i = 0; i < leafCount; i++) {
           const x = tree.x + (leaves() - leaves()) * tree.width;
           const y = tree.y + (leaves() - leaves()) * tree.width * 0.2;
           hdOval(g, pick(leaves, shades.slice(1)), x, y, between(leaves, 0.3, 0.9), 0.25);
@@ -3617,12 +3732,71 @@
     });
   }
 
+  function generateAndroidCloudLayers(code) {
+    const random = randomFrom(hash(code + '/android-clouds'));
+    return cloudAreas.map((coverage, level) => {
+      if (!level) return null;
+      const canvas = makeCanvas(CLOUD_TILE, SKY_HEIGHT, 0.5);
+      const g = canvas.getContext('2d');
+      const count = 8 + 2 * level;
+      for (let i = 0; i < count; i++) {
+        const x = i * CLOUD_TILE / count + between(random, -13, 13);
+        const y = between(random, 19, 75) + (i % 2) * level * 7;
+        const rx = between(random, 19, 36) + coverage * 42;
+        const ry = between(random, 3, 7) + coverage * 17;
+        const fill = hdGradient(g, 0, y - ry * 1.5, 0, y + ry, ['#e1e7e8', '#d4dce1', '#a2afbe']);
+        g.globalAlpha = 0.36 + coverage * 0.32;
+        for (const offset of [-CLOUD_TILE, 0, CLOUD_TILE]) {
+          const center = x + offset;
+          if (center + rx < 0 || center - rx > CLOUD_TILE) continue;
+          hdOval(g, fill, center, y, rx, ry * 0.58);
+          hdOval(g, fill, center - rx * 0.22, y - ry * 0.38, rx * 0.51, ry * 0.86);
+          hdOval(g, fill, center + rx * 0.33, y - ry * 0.24, rx * 0.42, ry * 0.69);
+        }
+      }
+      return { canvas, speed: 0.55 + level * 0.24 };
+    });
+  }
+
+  function drawAndroidSkyDetails(world, weather, clouds, sun, moon) {
+    if (moon.darkness > 0) {
+      const stars = world.atmosphere.stars;
+      ctx.fillStyle = '#e4eaf4';
+      ctx.globalAlpha = moon.darkness * 0.65;
+      for (let i = 0; i < stars.length; i += 3) {
+        const { x, y, tone } = stars[i];
+        const size = mix(0.5, 1.15, tone);
+        ctx.fillRect(x, y, size, size);
+      }
+    }
+    if (sun.active) {
+      ctx.globalAlpha = (1 - weather.fog * 0.48) * (1 - clouds.coverage * 0.48);
+      hdOval(ctx, cssColor(blendRgb(sun.color, [255, 249, 224], 0.48)), sun.x, sun.y, 8.7, 8.7);
+    }
+    if (moon.brightness > 0) {
+      ctx.globalAlpha = moon.brightness;
+      hdPath(ctx, '#eee9d5', p => {
+        p.moveTo(moon.x + 2, moon.y - 5);
+        p.bezierCurveTo(moon.x - 10, moon.y - 8, moon.x - 8, moon.y + 9, moon.x + 4, moon.y + 5);
+        p.quadraticCurveTo(moon.x - 3, moon.y + 1, moon.x + 2, moon.y - 5);
+        p.closePath();
+      });
+    }
+    for (const { layer, offset, weight } of clouds.visible) {
+      ctx.globalAlpha = weight * (1 - moon.darkness * 0.64);
+      blit(ctx, layer.canvas, -offset, 0);
+      if (offset + W > CLOUD_TILE) blit(ctx, layer.canvas, CLOUD_TILE - offset, 0);
+    }
+    ctx.globalAlpha = 1;
+  }
+
   function drawSkyHD(world, light, motion, weather, clouds, sun, moon) {
     const a = seasonalColors[light.from], b = seasonalColors[light.to];
     const sky = a.sky.map((c, i) => blendRgb(blendRgb(rgb(c), rgb(b.sky[i]), light.blend), [75, 93, 115], clouds.coverage * (0.12 + i * 0.095)));
     const gradient = ctx.createLinearGradient(0, 0, 0, 154);
     [0, 0.42, 0.73, 1].forEach((t, i) => gradient.addColorStop(t, cssColor(sky[i])));
     ctx.fillStyle = gradient; ctx.fillRect(0, 0, W, H);
+    if (androidHD()) return drawAndroidSkyDetails(world, weather, clouds, sun, moon);
     ctx.save();
     if (moon.darkness > 0) {
       for (const star of world.atmosphere.stars) {
@@ -3736,7 +3910,7 @@
   }
 
   function desiredRenderScale() {
-    if (renderMode === 'pixel') return 1;
+    if (renderMode === 'pixel' || androidHD()) return 1;
     const display = Math.min(window.innerWidth / W, window.innerHeight / H);
     const maxScale = window.matchMedia('(pointer: coarse)').matches ? 2 : 4;
     return clamp(Math.ceil(display * (window.devicePixelRatio || 1)), 2, maxScale);
@@ -3745,18 +3919,18 @@
   function configureRenderer() {
     renderScale = desiredRenderScale();
     prepareSurface(canvas, W, H);
-    for (const surface of [landCanvas, shadowCanvas, festivalCanvas, windowLightCanvas]) prepareSurface(surface, W, H);
-    prepareSurface(cloudCanvas, W, SKY_HEIGHT);
+    prepareSurface(landCanvas, W, H);
+    for (const surface of [shadowCanvas, festivalCanvas, windowLightCanvas, cloudCanvas]) {
+      if (androidHD()) releaseSurface(surface);
+      else prepareSurface(surface, W, surface === cloudCanvas ? SKY_HEIGHT : H);
+    }
     canvas.classList.toggle('hi-dpi', renderMode === 'hd');
     canvas.setAttribute('aria-label', (renderMode === 'hd' ? 'Рисованная' : 'Пиксельная') + ' лесная деревня с жителями, питомцами, лесными зверями, птицами, погодой и сменой суток');
     for (const button of document.querySelectorAll('[data-render]')) button.setAttribute('aria-pressed', String(button.dataset.render === renderMode));
   }
 
   function releaseTerrainArtwork() {
-    for (const { terrain, sprites } of Object.values(layers)) {
-      releaseSurface(terrain);
-      for (const { canvas } of sprites) releaseSurface(canvas);
-    }
+    for (const layer of Object.values(layers)) releaseLandLayer(layer);
     if (world.moonMasks) {
       for (const mask of world.moonMasks) releaseSurface(mask);
       world.moonMasks = null;
@@ -3767,6 +3941,17 @@
     }
     layers = {};
     shadowPosition = -1;
+  }
+
+  function releaseLandLayer({ terrain, sprites }) {
+    releaseSurface(terrain);
+    for (const { canvas } of sprites) releaseSurface(canvas);
+  }
+
+  function releaseAndroidLandscape() {
+    if (!world.androidLandscape) return;
+    releaseLandLayer(world.androidLandscape);
+    world.androidLandscape = null;
   }
 
   function releaseCloudArtwork(cloudLayers) {
@@ -3785,6 +3970,10 @@
   }
 
   function buildCloudArtwork() {
+    if (androidHD()) {
+      world.cloudLayers = generateAndroidCloudLayers(world.code);
+      return;
+    }
     world.cloudLayers = renderMode === 'hd'
       ? generateCloudLayersHD(world.code, world.pixelCloudLayers)
       : world.pixelCloudLayers;
@@ -3816,6 +4005,7 @@
   }
 
   function characterCoat(g, color, x0, y0, x1, y1) {
+    if (androidHD()) return color;
     const paint = g.createLinearGradient(x0, y0, x1, y1);
     paint.addColorStop(0, characterTone(color, '#fff0d0', 0.19));
     paint.addColorStop(0.5, color);
@@ -4062,6 +4252,23 @@
       }
     }
     g.restore();
+  }
+
+  function drawAndroidBird(g, species, colors, wing, bank) {
+    const small = species === 'tit' || species === 'sparrow';
+    const span = small ? 4 : species === 'stork' ? 8 : 6;
+    const lift = wing * (small ? 3 : 4.5);
+    hdPath(g, colors.wing, p => {
+      for (const side of [-1, 1]) {
+        const tip = -lift - bank * side * 2;
+        p.moveTo(0, 0);
+        p.quadraticCurveTo(side * span * 0.65, tip - 1.5, side * span, tip);
+        p.quadraticCurveTo(side * span * 0.53, tip + 1.6, 0, 2);
+        p.closePath();
+      }
+    });
+    hdOval(g, colors.body, 1, 0.8, small ? 2 : 3.1, 1.1);
+    if (species === 'stork') hdLine(g, colors.beak, [[3, 0], [6, -0.9], [9, -0.6]], 0.6);
   }
 
   function drawFlyingBirdHD(g, species, colors, wing, bank) {
@@ -4548,6 +4755,7 @@
   let weather;
   let frame = 0;
   let lastRender = 0;
+  let androidFrameInterval = 50;
 
   const currentWeather = () => weatherAt(world, simulatedMinutes / 60, weatherPicker.value, coverPicker.value);
 
@@ -4557,7 +4765,7 @@
   }
 
   function render() {
-    if (!world) return;
+    if (!world || (androidHD() && (ctx.isContextLost?.() || landContext.isContextLost?.()))) return;
     const hour = simulatedMinutes / 60;
     const light = lightingAt(hour);
     const clouds = cloudState(world, motion, weather.level);
@@ -4575,14 +4783,20 @@
   function tick(now) {
     frame = 0;
     const elapsed = now - lastRender;
-    if (elapsed >= 40) {
+    const mobile = androidHD();
+    if (elapsed >= (mobile ? androidFrameInterval : 40)) {
       const dt = Math.min(elapsed / 1000, 0.15);
       lastRender = now;
       simulatedMinutes = wrap(simulatedMinutes + dt * DAY_MINUTES / DAY_SECONDS, DAY_MINUTES);
       motion += dt;
       const target = currentWeather();
       for (const key of Object.keys(weather)) weather[key] = mix(weather[key], target[key], 1 - Math.exp(-dt * 0.83));
+      const paintStart = mobile ? performance.now() : 0;
       render();
+      if (mobile) {
+        const interval = clamp((performance.now() - paintStart) * 1.4, 50, 100);
+        androidFrameInterval = Math.max(interval, mix(androidFrameInterval, interval, 0.16));
+      }
     }
     startClock();
   }
@@ -4594,6 +4808,7 @@
   function resetClock() {
     if (frame) cancelAnimationFrame(frame);
     frame = 0;
+    androidFrameInterval = 50;
     lastRender = performance.now();
     startClock();
   }
@@ -4616,6 +4831,7 @@
   function selectVillage(code) {
     if (world) {
       releaseModeArtwork();
+      releaseAndroidLandscape();
       releaseCloudArtwork(world.pixelCloudLayers);
     }
     world = generateWorld(code);
@@ -4638,6 +4854,7 @@
 
   function rebuildSeason() {
     releaseTerrainArtwork();
+    releaseAndroidLandscape();
     world.sceneItems = season === 'winter' ? [...world.items, world.festivalTree].sort((a, b) => a.y - b.y) : world.items;
     seasonalColors = Object.fromEntries(Object.entries(colors).map(([phase, base]) =>
       [phase, seasonalPalette(base, phase)]));
@@ -4771,6 +4988,20 @@
     buildCloudArtwork();
     render();
     resetClock();
+  }
+
+  let androidRestoreFrame = 0;
+  function restoreAndroidRenderer(event) {
+    if (!event.currentTarget.width || androidRestoreFrame) return;
+    if (!androidHD()) {
+      releaseAndroidLandscape();
+      return;
+    }
+    androidRestoreFrame = requestAnimationFrame(() => {
+      androidRestoreFrame = 0;
+      releaseAndroidLandscape();
+      if (androidHD()) refreshRenderer();
+    });
   }
 
   for (const button of document.querySelectorAll('[data-render]')) {
