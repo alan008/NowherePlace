@@ -47,7 +47,10 @@
     height: min(100dvh, 56.25vw);
     image-rendering: crisp-edges;
     image-rendering: pixelated;
+    visibility: hidden;
   }
+  .render-status { position: absolute; inset: 0; display: grid; place-content: center; padding: 24px; text-align: center; color: var(--muted); pointer-events: none; }
+  .render-status[hidden] { display: none; }
   canvas:focus { outline: none; }
   canvas { touch-action: manipulation; }
   canvas.hi-dpi { image-rendering: auto; }
@@ -180,6 +183,7 @@
 <body>
 <main id="village">
   <canvas id="landscape" width="480" height="270" tabindex="-1" role="img" aria-label="Пиксельная лесная деревня с жителями, питомцами, лесными зверями, птицами, погодой и сменой суток"></canvas>
+  <div id="render-status" class="render-status" role="status">Создаём деревню…</div>
   <button id="ui-toggle" class="ui-toggle" type="button" aria-label="Скрыть интерфейс" aria-pressed="false" aria-controls="interface" title="Скрыть интерфейс (H)"><span class="view-icon" aria-hidden="true"></span></button>
   <div class="ui" id="interface">
     <header class="scene-heading">
@@ -260,7 +264,14 @@
   const FRAME_INTERVAL = 1000 / 30;
   const byId = id => document.getElementById(id);
   const canvas = byId('landscape');
-  const ctx = canvas.getContext('2d', { alpha: false });
+  // Android GPU drivers can lose hundreds of separate accelerated Canvas surfaces at startup.
+  const androidCanvas = /Android/i.test(navigator.userAgent);
+  const drawingOptions = {alpha: true, desynchronized: false, willReadFrequently: androidCanvas};
+  const ctx = canvas.getContext('2d', drawingOptions);
+  const renderStatus = byId('render-status');
+  let renderBlocked = false;
+  let recoveryTimer = null;
+  let recoveryAttempts = 0;
   let renderMode = 'hd';
   try { renderMode = localStorage.getItem('village-render') === 'pixel' ? 'pixel' : 'hd'; } catch {}
   let renderScale = 1;
@@ -269,7 +280,14 @@
     surface.height = Math.ceil(height * scale);
     surface.logicalWidth = width;
     surface.logicalHeight = height;
-    const g = surface.getContext('2d');
+    const g = surface.getContext('2d', drawingOptions);
+    if (!g) throw new Error('Canvas context unavailable');
+    if (!surface.renderWatched) {
+      surface.renderWatched = true;
+      surface.addEventListener('contextlost', () => {
+        if (isLiveSurface(surface)) recoverRenderer(new Error('Canvas context lost'));
+      });
+    }
     g.setTransform(scale, 0, 0, scale, 0, 0);
     g.imageSmoothingEnabled = renderMode === 'hd';
     return surface;
@@ -280,6 +298,16 @@
   }
   function blit(g, source, x, y) {
     g.drawImage(source, x, y, source.logicalWidth || source.width, source.logicalHeight || source.height);
+  }
+  function blitSprite(g, sprite) {
+    const scale = sprite.canvas.width / sprite.canvas.logicalWidth;
+    g.drawImage(sprite.canvas, sprite.sourceX * scale, sprite.sourceY * scale,
+      sprite.width * scale, sprite.height * scale, sprite.left, sprite.top, sprite.width, sprite.height);
+  }
+
+  function releaseSurface(surface) {
+    surface.width = 1;
+    surface.height = 1;
   }
   const landCanvas = makeCanvas();
   const landContext = landCanvas.getContext('2d');
@@ -1747,8 +1775,8 @@
       g.translate(-bounds.left, -bounds.top);
       for (const sprite of sprites) {
         const spriteBounds = {left: sprite.left, top: sprite.top,
-          right: sprite.left + sprite.canvas.logicalWidth, bottom: sprite.top + sprite.canvas.logicalHeight};
-        if (sprite.y > source.y && intersects(bounds, spriteBounds)) blit(g, sprite.canvas, sprite.left, sprite.top);
+          right: sprite.left + sprite.width, bottom: sprite.top + sprite.height};
+        if (sprite.y > source.y && intersects(bounds, spriteBounds)) blitSprite(g, sprite);
       }
       const lightCanvas = makeCanvas(bounds.width, bounds.height);
       const lightContext = lightCanvas.getContext('2d');
@@ -1794,12 +1822,38 @@
       }
       left = Math.floor(left);
       top = Math.floor(top);
-      const canvas = makeCanvas(Math.ceil(width), Math.ceil(bottom - top));
-      const g = canvas.getContext('2d');
-      g.translate(-left, -top);
-      drawProp(g, item, palette);
-      return { canvas, left, top, y: item.y };
+      return {item, left, top, width: Math.ceil(width), height: Math.ceil(bottom - top), y: item.y};
     });
+    // Pack the artwork into small shared atlases instead of allocating a context per object.
+    // Each atlas stays within 1024 x 1024 physical pixels in Hi DPI mode.
+    const pages = [];
+    let page;
+    for (const sprite of [...sprites].sort((a, b) => b.height - a.height || b.width - a.width)) {
+      if (!page) { page = {x: 0, y: 0, rowHeight: 0, width: 0, height: 0, sprites: []}; pages.push(page); }
+      if (page.x + sprite.width > 512) { page.x = 0; page.y += page.rowHeight; page.rowHeight = 0; }
+      if (page.y + sprite.height > 512) {
+        page = {x: 0, y: 0, rowHeight: 0, width: 0, height: 0, sprites: []}; pages.push(page);
+      }
+      sprite.sourceX = page.x; sprite.sourceY = page.y;
+      page.sprites.push(sprite);
+      page.x += sprite.width;
+      page.rowHeight = Math.max(page.rowHeight, sprite.height);
+      page.width = Math.max(page.width, page.x);
+      page.height = Math.max(page.height, page.y + sprite.height);
+    }
+    for (const page of pages) {
+      const atlas = makeCanvas(page.width, page.height);
+      const g = atlas.getContext('2d');
+      for (const sprite of page.sprites) {
+        g.save();
+        g.beginPath(); g.rect(sprite.sourceX, sprite.sourceY, sprite.width, sprite.height); g.clip();
+        g.translate(sprite.sourceX - sprite.left, sprite.sourceY - sprite.top);
+        drawProp(g, sprite.item, palette);
+        g.restore();
+        sprite.canvas = atlas;
+        delete sprite.item;
+      }
+    }
     return { terrain, sprites };
   }
 
@@ -1860,6 +1914,8 @@
         blit(out, highlight, 0, 0);
       }
     }
+    releaseSurface(silhouette);
+    releaseSurface(highlight);
     return masks;
   }
 
@@ -2221,11 +2277,11 @@
       while (nextActor < actors.length && actors[nextActor].y <= sprite.y) {
         drawGroundActor(landContext, actors[nextActor++], motion);
       }
-      blit(landContext, sprite.canvas, sprite.left, sprite.top);
+      blitSprite(landContext, sprite);
       if (light.from !== light.to && light.blend > 0) {
         const other = layers[light.to].sprites[i];
         landContext.globalAlpha = light.blend;
-        blit(landContext, other.canvas, other.left, other.top);
+        blitSprite(landContext, other);
         landContext.globalAlpha = 1;
       }
     }
@@ -3706,6 +3762,8 @@
       const data = sg.getImageData(0, 0, CLOUD_TILE, SKY_HEIGHT).data;
       const opacity = new Uint8Array(CLOUD_TILE * SKY_HEIGHT);
       for (let i = 0; i < opacity.length; i++) opacity[i] = data[i * 4 + 3];
+      releaseSurface(sample);
+      releaseSurface(layer.canvas);
       return {canvas: surface, opacity, speed: layer.speed};
     });
   }
@@ -3848,6 +3906,7 @@
 
   function rebuildArtwork() {
     // Preserve the simulation, tracks, time, weather and population when changing only the artwork.
+    releaseArtwork(true);
     world.festivalTree.glows = null;
     world.cloudLayers = renderMode === 'hd' ? generateCloudLayersHD(world.code) : generateCloudLayersPixel(world.code);
     world.moonMasks = paintMoonlight(world);
@@ -4634,6 +4693,17 @@
   }
 
   function render() {
+    if (renderBlocked || !world || !layers) return;
+    try {
+      renderScene();
+      canvas.style.visibility = 'visible';
+      renderStatus.hidden = true;
+    } catch (error) {
+      recoverRenderer(error);
+    }
+  }
+
+  function renderScene() {
     if (!world) return;
     const hour = simulatedMinutes / 60;
     const light = lightingAt(hour);
@@ -4668,7 +4738,7 @@
   }
 
   function startClock() {
-    if (!frame && !paused && !document.hidden) frame = requestAnimationFrame(tick);
+    if (!frame && !paused && !renderBlocked && !document.hidden) frame = requestAnimationFrame(tick);
   }
 
   function resetClock() {
@@ -4695,6 +4765,7 @@
   }
 
   function selectVillage(code) {
+    releaseArtwork(true);
     world = generateWorld(code);
     world.population = createGroundPopulation(world);
     world.flocks = createFlocks(code);
@@ -4713,6 +4784,7 @@
   }
 
   function rebuildSeason() {
+    releaseArtwork(false);
     world.sceneItems = season === 'winter' ? [...world.items, world.festivalTree].sort((a, b) => a.y - b.y) : world.items;
     seasonalColors = Object.fromEntries(Object.entries(colors).map(([phase, base]) =>
       [phase, seasonalPalette(base, phase)]));
@@ -4728,6 +4800,7 @@
   for (const button of document.querySelectorAll('[data-season]')) {
     button.addEventListener('click', () => {
       if (season === button.dataset.season) return;
+      runRendererChange(() => {
       season = button.dataset.season;
       for (const option of document.querySelectorAll('[data-season]')) {
         option.setAttribute('aria-pressed', option === button);
@@ -4736,6 +4809,7 @@
       changeMusicSeason();
       showWeatherNow();
       resetClock();
+      });
     });
   }
 
@@ -4771,15 +4845,15 @@
     }
   }
 
-  byId('regenerate').addEventListener('click', () => selectVillage(freshCode()));
+  byId('regenerate').addEventListener('click', () => runRendererChange(() => selectVillage(freshCode())));
   byId('seed-form').addEventListener('submit', event => {
     event.preventDefault();
     const code = normalizeCode(seedField.value);
-    if (code) selectVillage(code);
+    if (code) runRendererChange(() => selectVillage(code));
   });
   window.addEventListener('hashchange', () => {
     const code = codeFromUrl();
-    if (code !== world.code) selectVillage(code || freshCode());
+    if (code !== world?.code) runRendererChange(() => selectVillage(code || freshCode()));
   });
 
   clock.addEventListener('input', () => {
@@ -4848,12 +4922,14 @@
   for (const button of document.querySelectorAll('[data-render]')) {
     button.addEventListener('click', () => {
       if (renderMode === button.dataset.render) return;
+      runRendererChange(() => {
       renderMode = button.dataset.render;
       try { localStorage.setItem('village-render', renderMode); } catch {}
       configureRenderer();
       rebuildArtwork();
       render();
       resetClock();
+      });
     });
   }
   let resizeTimer;
@@ -4861,15 +4937,100 @@
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       if (desiredRenderScale() === renderScale) return;
-      configureRenderer();
-      rebuildArtwork();
-      render();
-      resetClock();
+      runRendererChange(() => {
+        configureRenderer();
+        rebuildArtwork();
+        render();
+        resetClock();
+      });
     }, 180);
   });
 
-  configureRenderer();
-  selectVillage(codeFromUrl() || freshCode());
+  function artworkSurfaces(includeClouds) {
+    const surfaces = new Set();
+    for (const layer of Object.values(layers || {})) {
+      surfaces.add(layer.terrain);
+      for (const sprite of layer.sprites) surfaces.add(sprite.canvas);
+    }
+    for (const surface of world?.moonMasks || []) surfaces.add(surface);
+    for (const region of world?.foregroundMasks?.values() || []) {
+      surfaces.add(region.canvas); surfaces.add(region.lightCanvas);
+    }
+    for (const surface of world?.festivalTree?.glows || []) surfaces.add(surface);
+    if (includeClouds) for (const layer of world?.cloudLayers || []) if (layer) surfaces.add(layer.canvas);
+    return surfaces;
+  }
+
+  function releaseArtwork(includeClouds) {
+    for (const surface of artworkSurfaces(includeClouds)) releaseSurface(surface);
+    layers = undefined;
+    if (world) {
+      world.moonMasks = [];
+      world.foregroundMasks = new Map();
+      if (world.festivalTree) world.festivalTree.glows = null;
+      if (includeClouds) world.cloudLayers = [];
+    }
+  }
+
+  function isLiveSurface(surface) {
+    return surface === canvas || surface === landCanvas || surface === shadowCanvas || surface === cloudCanvas ||
+      actorSpritePool.some(slot => slot.canvas === surface) || artworkSurfaces(true).has(surface);
+  }
+
+  function runRendererChange(change) {
+    if (recoveryTimer !== null) { clearTimeout(recoveryTimer); recoveryTimer = null; }
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+    renderBlocked = false;
+    canvas.style.visibility = 'hidden';
+    renderStatus.textContent = 'Создаём деревню…';
+    renderStatus.hidden = false;
+    try { change(); } catch (error) { recoverRenderer(error); }
+  }
+
+  function recoverRenderer(error) {
+    if (renderBlocked) return;
+    console.warn('Village rendering interrupted', error);
+    renderBlocked = true;
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+    canvas.style.visibility = 'hidden';
+    renderStatus.hidden = false;
+    if (ui.hidden) toggleInterface();
+    if (recoveryAttempts >= 1) {
+      renderStatus.textContent = 'Изображение остановлено. Попробуйте перезагрузить страницу.';
+      return;
+    }
+    recoveryAttempts++;
+    renderStatus.textContent = 'Восстанавливаем изображение…';
+    let waits = 0;
+    const restore = () => {
+      const lost = [ctx, landContext, shadowContext, cloudContext].some(g => g.isContextLost?.());
+      if (lost) {
+        if (waits++ < 5) { recoveryTimer = setTimeout(restore, 300); return; }
+        recoveryTimer = null;
+        renderStatus.textContent = 'Изображение остановлено. Попробуйте перезагрузить страницу.';
+        return;
+      }
+      recoveryTimer = null;
+      runRendererChange(() => {
+        renderMode = 'pixel';
+        try { localStorage.setItem('village-render', renderMode); } catch {}
+        configureRenderer();
+        if (world?.sceneItems && world?.population && seasonalColors) {
+          rebuildArtwork();
+          showWeatherNow();
+          resetClock();
+        } else selectVillage(codeFromUrl() || freshCode());
+      });
+    };
+    recoveryTimer = setTimeout(restore, 300);
+  }
+
+  runRendererChange(() => {
+    configureRenderer();
+    selectVillage(codeFromUrl() || freshCode());
+  });
 })();
 </script>
 </body>
