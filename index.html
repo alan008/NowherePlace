@@ -90,9 +90,6 @@
     top: 5px;
     transform: rotate(-35deg);
   }
-  @media (pointer: coarse), (max-width: 680px) {
-    .ui-toggle { display: none; }
-  }
   .ui {
     position: absolute;
     inset: 0;
@@ -266,7 +263,7 @@
   const windowLightContext = windowLightCanvas.getContext('2d');
   const ui = byId('interface');
   const interfaceToggle = byId('ui-toggle');
-  const touchInterface = window.matchMedia('(pointer: coarse), (max-width: 680px)');
+  const compactInterface = window.matchMedia('(pointer: coarse), (max-width: 680px)');
   const clock = byId('time');
   const weatherPicker = byId('weather');
   const coverPicker = byId('cloud-cover');
@@ -5076,14 +5073,23 @@
     updateSceneCursor();
   });
   window.addEventListener('resize', updateSceneCursor);
+  let scenePointerType = '';
+  canvas.addEventListener('pointerdown', event => {
+    if (event.isPrimary) scenePointerType = event.pointerType;
+  });
   canvas.addEventListener('click', event => {
-    const point = scenePoint(event);
-    if (event.pointerType === 'mouse' && !paused) {
-      if (rangerKeys.has('Space')) return;
+    const pointerType = event.pointerType || (event.detail ? scenePointerType : '');
+    scenePointerType = '';
+    const mouse = pointerType === 'mouse';
+    if ((mouse || pointerType === 'touch') && !paused) {
+      if (mouse && rangerKeys.has('Space')) return;
+      const point = scenePoint(event);
       const { resident, animal, house } = sceneTargets(point);
       if (resident) {
-        setRanger(world, resident);
-        render();
+        if (mouse) {
+          setRanger(world, resident);
+          render();
+        }
         return;
       }
       if ((house && (house.cataclysm || houseHasDamage(house))) || (animal && world.rabidAnimals.has(animal.animal))) return;
@@ -5096,10 +5102,7 @@
         return;
       }
     }
-    const x = point.x / W;
-    const y = point.y / H;
-    const centralTap = x >= 0.18 && x <= 0.82 && y >= 0.18 && y <= 0.82;
-    if ((touchInterface.matches && centralTap) || (!touchInterface.matches && ui.hidden)) {
+    if (mouse && !compactInterface.matches && ui.hidden) {
       toggleInterface();
     } else if (!ui.hidden) {
       openSettings(false);
