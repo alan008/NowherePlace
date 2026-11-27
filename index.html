@@ -50,6 +50,10 @@
   }
   canvas:focus { outline: none; }
   canvas { touch-action: manipulation; }
+  #landscape.aiming { cursor: var(--aim-cursor), crosshair; }
+  #landscape.danger { cursor: var(--danger-cursor), pointer; }
+  #landscape.rabies { cursor: var(--rabies-cursor), pointer; }
+  #landscape.sheriff { cursor: var(--sheriff-cursor), pointer; }
   .ui-toggle {
     position: fixed;
     top: max(12px, env(safe-area-inset-top));
@@ -1436,6 +1440,14 @@
   }
 
   function drawProp(g, item, palette, contact = true) {
+    if (item.ash) {
+      drawAsh(g, item.x, item.y, item.ash, palette.phase);
+      return;
+    }
+    if (item.ruin) {
+      drawHouseRuins(g, item, item.ruin, palette, 1);
+      return;
+    }
     switch (item.kind) {
       case 'pine': drawPine(g, item, palette, contact); break;
       case 'festivalTree': drawPine(g, item, palette, contact); break;
@@ -1663,37 +1675,42 @@
     g.globalCompositeOperation = 'source-over';
   }
 
+  function paintSceneSprite(item, palette) {
+    const half = (item.width || item.size || 8) + 7;
+    const height = (item.height || item.size || 10) + 8;
+    let left = item.x - half;
+    let top = item.y - height;
+    let width = half * 2;
+    const bottom = item.y + (item.ruin ? 15 : 8);
+    if (item.ash) {
+      width = item.ash * 2 + 4;
+      left = item.x - width / 2;
+      top = item.y - item.ash * 0.4 - 3;
+    } else if (item.kind === 'house') {
+      const bounds = houseBounds(item, item.ruin ? 17 : 10);
+      left = bounds.left;
+      top = bounds.top;
+      width = bounds.right - left + 12;
+    } else if (item.kind === 'fence') {
+      left = Math.min(item.a[0], item.b[0]) - 3;
+      top = Math.min(item.a[1], item.b[1]) - item.height - 3;
+      width = Math.abs(item.a[0] - item.b[0]) + 8;
+    }
+    left = Math.floor(left);
+    top = Math.floor(top);
+    const canvas = makeCanvas(Math.ceil(width), Math.ceil(bottom - top));
+    const g = canvas.getContext('2d');
+    g.translate(-left, -top);
+    drawProp(g, item, palette);
+    return { canvas, left, top, y: item.y };
+  }
+
   function paintLand(world, palette) {
     const terrain = makeCanvas();
     const ground = terrain.getContext('2d');
     drawDistantLand(ground, world, palette);
     drawMeadow(ground, world, palette);
-    const sprites = world.sceneItems.map(item => {
-      let half = (item.width || item.size || 8) + 7;
-      let height = (item.height || item.size || 10) + 8;
-      let left = item.x - half;
-      let top = item.y - height;
-      let width = half * 2;
-      let bottom = item.y + 8;
-      if (item.kind === 'house') {
-        const bounds = houseBounds(item, 10);
-        left = bounds.left;
-        top = bounds.top;
-        width = bounds.right - left + 12;
-      }
-      if (item.kind === 'fence') {
-        left = Math.min(item.a[0], item.b[0]) - 3;
-        top = Math.min(item.a[1], item.b[1]) - item.height - 3;
-        width = Math.abs(item.a[0] - item.b[0]) + 8;
-      }
-      left = Math.floor(left);
-      top = Math.floor(top);
-      const canvas = makeCanvas(Math.ceil(width), Math.ceil(bottom - top));
-      const g = canvas.getContext('2d');
-      g.translate(-left, -top);
-      drawProp(g, item, palette);
-      return { canvas, left, top, y: item.y };
-    });
+    const sprites = world.sceneItems.map(item => paintSceneSprite(item, palette));
     return { terrain, sprites };
   }
 
@@ -1705,8 +1722,9 @@
     const highlight = makeCanvas();
     const g = highlight.getContext('2d');
     for (const item of world.sceneItems) {
-      const house = item.kind === 'house' ? dimensions(item) : null;
-      const tree = item.kind === 'pine' || item.kind === 'leaf' || item.kind === 'festivalTree';
+      const house = item.kind === 'house' && !houseHasDamage(item) ? dimensions(item) : null;
+      const tree = !item.ash && !item.burning &&
+        (item.kind === 'pine' || item.kind === 'leaf' || item.kind === 'festivalTree');
       const { x, y } = item;
       shape.clearRect(0, 0, W, H);
       drawProp(shape, item, seasonalColors.night, false);
@@ -2046,7 +2064,8 @@
       const ink = cssColor(blendRgb([56, 43, 69], [38, 54, 65], elevation));
       shadowContext.clearRect(0, 0, W, H);
       for (const item of world.sceneItems) {
-        if (item.kind === 'house') castHouseShadow(item, dx, dy, ink);
+        if (item.ash || item.burning) continue;
+        if (item.kind === 'house' && !houseHasDamage(item)) castHouseShadow(item, dx, dy, ink);
         if (item.kind === 'pine' || item.kind === 'leaf' || item.kind === 'festivalTree') castTreeShadow(item, dx, dy, ink);
       }
     }
@@ -2099,26 +2118,44 @@
   function drawLand(world, layers, light, hour, motion, weather, clouds, sun, moon) {
     landContext.clearRect(0, 0, W, H);
     drawLandLayer(layers, light, 'terrain');
+    drawScorchedGround(landContext, world, motion);
     drawFlocks(landContext, world, hour, motion, weather, sun, moon);
-    const actors = groundPopulation(world, motion, hour);
-    updateFootprints(world, actors, motion);
+    const dt = updateRangerMotion(world, motion);
+    const ambient = applyRangerPoses(world, groundPopulation(world, motion, hour));
+    const actors = updateRabidAnimals(world, ambient, motion);
+    if (world.fallenBirds.length) {
+      for (const bird of world.fallenBirds) {
+        if (!bird.landed && motion - bird.started >= bird.duration) {
+          bird.landed = true;
+          playSceneSound('birdImpact', 'impact', bird.landing.x);
+        }
+        actors.push({ kind: 'fallenBird', y: bird.landing.y, bird,
+          colors: birdColors(flyingSpecies[bird.species], sun, moon, weather.fog) });
+      }
+    }
+    igniteJetTargets(world, actors, motion);
+    const visibleActors = applyFireDamage(world, actors, motion, dt);
+    world.groundActors = visibleActors;
+    updateFootprints(world, visibleActors, motion);
     drawFootprints(landContext, world, motion);
     drawCastShadows(world, sun);
     let nextActor = 0;
     for (let i = 0; i < world.sceneItems.length; i++) {
       const sprite = layers[light.from].sprites[i];
-      while (nextActor < actors.length && actors[nextActor].y <= sprite.y) {
-        drawGroundActor(landContext, actors[nextActor++], motion);
+      while (nextActor < visibleActors.length && visibleActors[nextActor].y <= sprite.y) {
+        drawGroundActor(landContext, visibleActors[nextActor++], motion);
       }
-      landContext.drawImage(sprite.canvas, sprite.left, sprite.top);
-      if (light.from !== light.to && light.blend > 0) {
-        const other = layers[light.to].sprites[i];
-        landContext.globalAlpha = light.blend;
-        landContext.drawImage(other.canvas, other.left, other.top);
-        landContext.globalAlpha = 1;
-      }
+      const item = world.sceneItems[i];
+      const other = light.from !== light.to && light.blend > 0 ? layers[light.to].sprites[i] : null;
+      if (item.burning) {
+        drawBurningProp(landContext, item, world.fires.get(item), motion,
+          () => drawSceneSprite(landContext, sprite, other, light.blend));
+      } else if (item.cataclysm) {
+        drawHouseCataclysm(landContext, item, seasonalColors[light.from], motion,
+          () => drawSceneSprite(landContext, sprite, other, light.blend));
+      } else drawSceneSprite(landContext, sprite, other, light.blend);
     }
-    while (nextActor < actors.length) drawGroundActor(landContext, actors[nextActor++], motion);
+    while (nextActor < visibleActors.length) drawGroundActor(landContext, visibleActors[nextActor++], motion);
     gradeLandscape(sun, moon, clouds, weather, hour);
     if (moon.direct > 0.005) {
       const tint = moon.direct * 0.84;
@@ -2128,9 +2165,11 @@
       landContext.drawImage(world.moonMasks[1], 0, 0);
       landContext.globalAlpha = 1;
     }
-    if (season === 'winter') drawFestivalLights(world, actors, motion, moon.darkness);
+    if (season === 'winter' && !world.festivalTree.burning && !world.festivalTree.ash) {
+      drawFestivalLights(world, visibleActors, motion, moon.darkness);
+    }
     const camp = campState(world.population.camp, hour);
-    if (camp && camp.heat > 0) {
+    if (camp && camp.heat > 0 && !world.fires.has(world.population.camp)) {
       const hearth = world.population.camp;
       const flicker = 0.91 + Math.sin(motion * 13) * 0.05 + Math.sin(motion * 21) * 0.04;
       const glow = landContext.createRadialGradient(hearth.x, hearth.y - 3, 2, hearth.x, hearth.y - 3, 32);
@@ -2159,7 +2198,7 @@
     }
 
     for (const house of world.houses) {
-      if (house.style === 'shed') continue;
+      if (house.style === 'shed' || houseHasDamage(house)) continue;
       const strength = Math.max(smooth((hour - house.litAt) / 0.75), 1 - smooth((hour - house.goesDark) / 0.6));
       if (strength <= 0) continue;
       windowLightContext.clearRect(0, 0, W, H);
@@ -2183,7 +2222,7 @@
       }
       windowLightContext.restore();
       windowLightContext.globalAlpha = 1;
-      maskForeground(windowLightContext, world, actors, house.y, motion);
+      maskForeground(windowLightContext, world, visibleActors, house.y, motion);
       ctx.drawImage(windowLightCanvas, 0, 0);
     }
 
@@ -2295,7 +2334,7 @@
   function drawChimneySmoke(world, motion, hour) {
     if (season !== 'winter' && !(season === 'autumn' && (hour < 9 || hour > 18))) return;
     for (const house of world.houses) {
-      if (!houseStyles[house.style].chimney) continue;
+      if (!houseStyles[house.style].chimney || houseHasDamage(house)) continue;
       const d = dimensions(house);
       const localX = house.view === 'side' ? d.right - 8 : d.peak + Math.round(d.depth * 0.68) + 2;
       const x = house.x + localX * house.face;
@@ -2374,6 +2413,7 @@
   function clearGround(world, x, y, padding = 2) {
     return x > 3 && x < W - 3 && y > world.fringe(x) + 2 && y < H - 3 &&
       !world.houses.some(h => {
+        if (h.ash) return false;
         const d = dimensions(h);
         return Math.abs(x - h.x) < (d.front + d.depth) * 0.5 + padding && y > h.y - d.rise - 5 - padding && y < h.y + 4 + padding;
       }) && !world.gardens.some(g => x > g.left - padding && x < g.right + padding && y > g.top - padding && y < g.bottom + padding) &&
@@ -2448,7 +2488,7 @@
         }
         if (points.length < 2) continue;
         const walk = measureWalk(points.concat(points.slice(0, -1).reverse()));
-        pets.push({ kind, home, walk, offset: between(random, 0, 40), speed: kind === 'cat' ? 4 : 5.5,
+        pets.push({ kind, home, walk, offset: between(random, 0, 40), speed: kind === 'cat' ? 5 : 5.5,
           coat: pick(random, kind === 'cat' ? ['#bd8756', '#d2c8ad', '#6b6a6a', '#45484a'] : ['#a47a50', '#d0ba8d', '#656462']),
           patch: pick(random, ['#e5d3ad', '#514b43', '#a5815a']) });
       }
@@ -2480,7 +2520,7 @@
       }
       if (routes.length) wildlife.push({ kind, routes, offset: between(random, 0, 90) + index * 19,
         interval: kind === 'hare' ? 32 : kind === 'bear' ? 112 : kind === 'deer' ? 84 : 61,
-        speed: { hare: 13, fox: 10, wolf: 12, deer: 6, bear: 3.8 }[kind] });
+        speed: { hare: 13, fox: 10, wolf: 12, deer: 6, bear: 5 }[kind] });
     }
     const camp = createCamp(world, homes, people);
     return { people, pets, wildlife, camp };
@@ -2529,7 +2569,7 @@
       const seat = { x: x + seats[i][0], y: y + seats[i][1] };
       const walk = measureWalk([...start, ...approach.slice(1), { x, y: y + 9 }, seat]);
       const resident = people.find(p => p.home === home);
-      return { ...resident, kind: 'person', home, walk, seat, offset: i * 2.7,
+      return { ...resident, resident, kind: 'person', home, walk, seat, offset: i * 2.7,
         arrival: 1.42 + i * 0.17, departure: 4.97 + i * 0.13,
         returnDuration: clamp(walk.distance / 100, 0.8, 1.95),
         shirt: resident?.shirt || pick(random, ['#b17860', '#799185', '#a28bba']),
@@ -2559,7 +2599,7 @@
     if (!state) return [];
     const { age, flame, embers } = state;
     const actors = [];
-    if (age > 1.42 && age < 6.3) actors.push({ kind: 'fire', x: camp.x, y: camp.y, flame, embers, alpha: 1 });
+    if (age > 1.42 && age < 6.3) actors.push({ kind: 'fire', camp, x: camp.x, y: camp.y, flame, embers, alpha: 1 });
     for (const member of camp.members) {
       const leave = member.departure;
       const start = 0.12 + member.offset / 22;
@@ -2571,18 +2611,18 @@
       const position = walkPosition(member.walk, progress);
       if (age >= leave) position.direction *= -1;
       if (seated) Object.assign(position, member.seat, { direction: camp.x >= member.seat.x ? 1 : -1 });
-      actors.push({ ...member, ...position, seated, moving: !seated, working: seated,
+      actors.push({ ...member, ...position, resident: member.resident || member, seated, moving: !seated, working: seated,
         alpha: smooth((age - start) / 0.07) * smooth((end - age) / 0.07) });
     }
     return actors;
   }
 
   function groundPopulation(world, motion, hour) {
-    const actors = campPopulation(world.population.camp, hour);
+    const actors = campPopulation(world.population.camp, hour).filter(actor => !world.deadResidents.has(actor.resident));
     const awayAtCamp = new Set(actors.filter(actor => actor.kind === 'person').map(actor => actor.home));
     const daylight = smooth((hour - 5) / 1.5) * smooth((21.4 - hour) / 1.6);
     for (const person of world.population.people) {
-      if (awayAtCamp.has(person.home)) continue;
+      if (awayAtCamp.has(person.home) || world.deadResidents.has(person)) continue;
       const clearingSnow = season === 'winter' && person.activity === 'dig';
       const door = clearingSnow ? houseDoor(person.home) : null;
       const walk = clearingSnow ? measureWalk([door, { x: door.x + 7, y: door.y + 9 }]) : person.walk;
@@ -2599,7 +2639,7 @@
       if (returning) position.direction *= -1;
       if (working && person.meeting) Object.assign(position, person.meeting, { direction: person.partnerSide });
       const fade = smooth(elapsed / 1.1) * smooth((travel * 2 + outside - elapsed) / 1.1);
-      actors.push({ ...person, ...position, kind: 'person', moving: !working, working,
+      actors.push({ ...person, ...position, resident: person, kind: 'person', moving: !working, working,
         activity: clearingSnow ? 'shovel' : person.activity, alpha: daylight * fade });
     }
     for (const pet of world.population.pets) {
@@ -2608,10 +2648,10 @@
       const position = walkPosition(pet.walk, Math.min(1, age / travel));
       if (pet.kind === 'dog') {
         const dog = nightDog(pet, position, motion, hour, age < travel);
-        if (dog) actors.push(dog);
+        if (dog) actors.push({ ...dog, animal: pet });
         continue;
       }
-      actors.push({ ...pet, ...position, moving: age < travel, alpha: mix(0.55, 1, daylight) });
+      actors.push({ ...pet, ...position, animal: pet, moving: age < travel, alpha: mix(0.55, 1, daylight) });
     }
     for (const animal of world.population.wildlife) {
       if (season === 'winter' && animal.kind === 'bear') continue;
@@ -2626,7 +2666,7 @@
         : progress < 0.6 ? 0.5 : 0.5 + (progress - 0.6) * 1.25) : progress;
       const p = walkPosition(route, distance);
       const fade = smooth(age / 2.5) * smooth((duration - age) / 2.5);
-      actors.push({ ...animal, ...p, moving: !grazing, alpha: fade, wild: true,
+      actors.push({ ...animal, ...p, animal, moving: !grazing, alpha: fade, wild: true,
         coat: animal.kind === 'hare' && season === 'winter' ? '#e1e1d5' :
           { hare: '#bdbaa4', fox: '#c88648', wolf: '#898e90', deer: '#b4956b', bear: '#80664d' }[animal.kind],
         patch: animal.kind === 'fox' ? '#e3d1ae' : '#c6bda5' });
@@ -2666,7 +2706,328 @@
       sleeping: night > 0.7, alpha: 1 };
   }
 
+  function inMeadow(world, { x, y }) {
+    return x >= 5 && x <= W - 5 && y >= world.fringe(x) + 2 && y <= H - 4;
+  }
+
+  function inHouseFootprint({ x, y }, box) {
+    return x > box.left && x < box.right && y > box.top && y < box.bottom;
+  }
+
+  function crossesHouse(from, to, box) {
+    let enter = 0;
+    let exit = 1;
+    for (const [start, end, low, high] of [[from.x, to.x, box.left, box.right], [from.y, to.y, box.top, box.bottom]]) {
+      const delta = end - start;
+      if (Math.abs(delta) < 0.00001) {
+        if (start <= low || start >= high) return false;
+        continue;
+      }
+      const a = (low - start) / delta;
+      const b = (high - start) / delta;
+      enter = Math.max(enter, Math.min(a, b));
+      exit = Math.min(exit, Math.max(a, b));
+      if (enter >= exit) return false;
+    }
+    return true;
+  }
+
+  function chaseWaypoint(world, from, target, obstacles) {
+    const boxes = obstacles.filter(box => !inHouseFootprint(from, box) && !inHouseFootprint(target, box));
+    if (!boxes.some(box => crossesHouse(from, target, box))) return target;
+
+    // A chase can go around either end of a house footprint.
+    const points = [from, target];
+    for (const box of boxes) {
+      for (const x of [box.left - 1, box.right + 1]) {
+        for (const y of [box.top - 1, box.bottom + 1]) {
+          const corner = { x, y };
+          if (inMeadow(world, corner) && !boxes.some(other => inHouseFootprint(corner, other))) points.push(corner);
+        }
+      }
+    }
+    const cost = new Float32Array(points.length).fill(Infinity);
+    const first = new Int16Array(points.length).fill(-1);
+    const visited = new Uint8Array(points.length);
+    cost[0] = 0;
+    for (let step = 0; step < points.length; step++) {
+      let current = -1;
+      for (let i = 0; i < points.length; i++) {
+        if (!visited[i] && Number.isFinite(cost[i]) && (current < 0 || cost[i] < cost[current])) current = i;
+      }
+      if (current < 0) break;
+      if (current === 1) return points[first[current]];
+      visited[current] = 1;
+      const a = points[current];
+      for (let i = 1; i < points.length; i++) {
+        if (visited[i]) continue;
+        const b = points[i];
+        const distance = cost[current] + Math.hypot(a.x - b.x, a.y - b.y);
+        if (distance >= cost[i] || boxes.some(box => crossesHouse(a, b, box))) continue;
+        cost[i] = distance;
+        first[i] = current === 0 ? i : first[current];
+      }
+    }
+    return target;
+  }
+
+  function moveDuringChase(world, actor, heading, distance, obstacles) {
+    actor.moving = false;
+    if (distance <= 0.0001) return;
+    for (const turn of [0, 0.52, -0.52, 1.05, -1.05, Math.PI / 2, -Math.PI / 2]) {
+      const dx = Math.cos(heading + turn) * distance;
+      const next = { x: actor.x + dx, y: actor.y + Math.sin(heading + turn) * distance };
+      if (!inMeadow(world, next) || obstacles.some(box =>
+        !inHouseFootprint(actor, box) && crossesHouse(actor, next, box))) continue;
+      if (Math.abs(dx) > 0.01) actor.direction = Math.sign(dx);
+      actor.x = next.x;
+      actor.y = next.y;
+      actor.moving = true;
+      return;
+    }
+  }
+
+  function groundObstacles(world) {
+    return world.houses.filter(house => !house.ruin && !house.ash).map(house => {
+      const { front, depth, rise } = dimensions(house);
+      const half = (front + depth) * 0.5 + 1;
+      return { left: house.x - half, right: house.x + half, top: house.y - rise - 5, bottom: house.y + 4 };
+    });
+  }
+
+  const rangerDirections = {
+    KeyW: [0, -1], KeyA: [-1, 0], KeyS: [0, 1], KeyD: [1, 0],
+    ArrowUp: [0, -1], ArrowLeft: [-1, 0], ArrowDown: [0, 1], ArrowRight: [1, 0]
+  };
+  const rangerKeys = new Set();
+  const flameRange = 48;
+
+  function setRanger(world, person) {
+    if (world.ranger?.resident === person?.resident) return;
+    if (world.ranger) Object.assign(world.ranger, { ranger: false, moving: false });
+    world.ranger = person ? { ...person, ranger: true, moving: false, fleeing: false, working: false,
+      seated: false, alpha: 1, angle: person.direction < 0 ? Math.PI : 0 } : null;
+    if (person) {
+      world.residentPoses.set(person.resident, world.ranger);
+      for (const hunter of world.rabidAnimals.values()) {
+        if (hunter.target === person.resident) {
+          hunter.prey = null;
+          hunter.waypoint = null;
+        }
+      }
+    } else rangerKeys.clear();
+    world.jet = null;
+    updatePauseTitle();
+  }
+
+  function applyRangerPoses(world, ambient) {
+    const actors = ambient.filter(actor => !world.residentPoses.has(actor.resident) && !world.fires.has(actorFireKey(actor)));
+    for (const [resident, actor] of world.residentPoses) {
+      if (world.deadResidents.has(resident) || world.fires.has(resident)) world.residentPoses.delete(resident);
+      else actors.push(actor);
+    }
+    return actors;
+  }
+
+  function rangerNozzle(ranger) {
+    const dx = Math.cos(ranger.angle);
+    const dy = Math.sin(ranger.angle);
+    const scale = groundActorScale(ranger.y);
+    return { x: ranger.x + dx * 10 * scale, y: ranger.y - 7 * scale + dy * 10 * scale, dx, dy };
+  }
+
+  function updateRangerMotion(world, motion) {
+    const dt = paused ? 0 : clamp(motion - world.lastFireMotion, 0, 0.15);
+    world.lastFireMotion = motion;
+    world.jet = null;
+    const ranger = world.ranger;
+    if (!ranger || paused) return dt;
+    if (world.deadResidents.has(ranger.resident) || world.fires.has(ranger.resident)) {
+      setRanger(world, null);
+      return dt;
+    }
+    let dx = 0;
+    let dy = 0;
+    for (const key of rangerKeys) {
+      if (!rangerDirections[key]) continue;
+      dx += rangerDirections[key][0];
+      dy += rangerDirections[key][1];
+    }
+    const heading = Math.atan2(dy, dx);
+    if (dx || dy) moveDuringChase(world, ranger, heading, 38 * dt, groundObstacles(world));
+    else ranger.moving = false;
+    const aim = aimPointer && scenePoint(aimPointer);
+    const aimY = ranger.y - 7 * groundActorScale(ranger.y);
+    if (aim && Math.hypot(aim.x - ranger.x, aim.y - aimY) > 2) ranger.angle = Math.atan2(aim.y - aimY, aim.x - ranger.x);
+    else if (dx || dy) ranger.angle = heading;
+    ranger.direction = Math.cos(ranger.angle) < 0 ? -1 : 1;
+    if (rangerKeys.has('Space')) {
+      world.jet = rangerNozzle(ranger);
+      if (motion >= world.nextJetSound) {
+        playSceneSound('flameJet', 'impact', world.jet.x);
+        world.nextJetSound = motion + 0.28;
+      }
+    } else world.nextJetSound = motion;
+    return dt;
+  }
+
+  function startRabidChase(world, actor, motion) {
+    if (world.rabidAnimals.has(actor.animal)) return;
+    const speed = actor.speed * 4;
+    world.rabidAnimals.set(actor.animal, {
+      actor: { ...actor, rabid: true, sleeping: false, alpha: 1, speed }, target: null, prey: null,
+      biteStarted: null, waypoint: null, routeUntil: motion, random: randomFrom(hash(world.code + '/' + actor.offset))
+    });
+    playSceneSound('wolfHowl', 'warning', actor.x);
+  }
+
+  function playRabidBite(actor) {
+    const kind = actor.kind;
+    const sound = kind === 'bear' ? 'bearGrowl' : ['dog', 'wolf', 'fox'].includes(kind) ? 'canineSnarl' : 'animalHiss';
+    playSceneSound(sound, 'impact', actor.x);
+  }
+
+  function updateRabidHunter(world, hunter, person, obstacles, motion, dt) {
+    const animal = hunter.actor;
+    const distance = Math.hypot(person.x - animal.x, person.y - animal.y);
+    if (!hunter.prey && !person.ranger && distance <= 43) {
+      hunter.prey = { ...person, alpha: 1, fleeing: true, working: false, seated: false };
+    }
+    if (hunter.biteStarted === null && distance <= 5.2 && !obstacles.some(box =>
+      !inHouseFootprint(animal, box) && !inHouseFootprint(person, box) && crossesHouse(animal, person, box))) {
+      if (person.ranger) setRanger(world, null);
+      hunter.prey ??= { ...person, alpha: 1, working: false, seated: false };
+      hunter.biteStarted = motion;
+      hunter.nextBite = motion;
+      animal.biting = true;
+      animal.moving = false;
+      animal.direction = person.x >= animal.x ? 1 : -1;
+      Object.assign(hunter.prey, { fleeing: false, attacked: true, moving: false, direction: -animal.direction });
+    }
+    if (hunter.biteStarted !== null) {
+      if (motion - hunter.biteStarted >= 2.15) {
+        world.deadResidents.set(hunter.target, { ...hunter.prey, kind: 'deadPerson', direction: animal.direction });
+        hunter.target = null;
+        hunter.prey = null;
+        hunter.biteStarted = null;
+        hunter.waypoint = null;
+        animal.biting = false;
+      } else if (motion >= hunter.nextBite) {
+        hunter.nextBite = motion + 0.47;
+        animal.biteAt = motion;
+        const { x, y } = hunter.prey;
+        world.biteSplashes.push({ kind: 'biteSplash', x, y, alpha: 1, started: motion,
+          droplets: makeBloodDroplets(hunter.random, animal.direction, 9, 0.63) });
+        playRabidBite(animal);
+      }
+      return;
+    }
+
+    if (hunter.prey) {
+      const heading = Math.atan2(person.y - animal.y, person.x - animal.x);
+      moveDuringChase(world, hunter.prey, heading, animal.speed * 0.7 * dt, obstacles);
+    }
+    const target = hunter.prey || person;
+    if (!hunter.waypoint || motion >= hunter.routeUntil || Math.hypot(animal.x - hunter.waypoint.x, animal.y - hunter.waypoint.y) < 1) {
+      hunter.waypoint = chaseWaypoint(world, animal, target, obstacles);
+      hunter.routeUntil = motion + 0.42;
+    }
+    const dx = hunter.waypoint.x - animal.x;
+    const dy = hunter.waypoint.y - animal.y;
+    moveDuringChase(world, animal, Math.atan2(dy, dx), Math.min(animal.speed * dt, Math.hypot(dx, dy)), obstacles);
+  }
+
+  function updateRabidAnimals(world, ambient, motion) {
+    const dt = clamp(motion - world.lastChaseMotion, 0, 0.15);
+    world.lastChaseMotion = motion;
+    if (!world.rabidAnimals.size) return ambient.concat(...world.deadResidents.values());
+
+    const people = new Map();
+    for (const person of ambient) {
+      if (person.resident && person.alpha >= 0.2 && inMeadow(world, person) && !world.deadResidents.has(person.resident)) {
+        people.set(person.resident, person);
+      }
+    }
+    const obstacles = groundObstacles(world);
+    const claimed = new Set();
+    for (const hunter of world.rabidAnimals.values()) {
+      if (world.fires.has(hunter.target)) {
+        hunter.target = null;
+        hunter.prey = null;
+        hunter.biteStarted = null;
+        hunter.actor.biting = false;
+      }
+      if (hunter.target && (hunter.prey || people.has(hunter.target))) claimed.add(hunter.target);
+      else if (!paused) hunter.target = null;
+    }
+    const fleeing = new Set();
+    const active = [];
+    for (const hunter of world.rabidAnimals.values()) {
+      if (!hunter.target && !paused) {
+        let nearest = Infinity;
+        for (const [resident, person] of people) {
+          if (claimed.has(resident) || world.deadResidents.has(resident)) continue;
+          const distance = Math.hypot(hunter.actor.x - person.x, hunter.actor.y - person.y);
+          if (distance >= nearest) continue;
+          nearest = distance;
+          hunter.target = resident;
+        }
+        hunter.waypoint = null;
+        if (hunter.target) claimed.add(hunter.target);
+      }
+      if (!paused) {
+        const person = hunter.prey || people.get(hunter.target);
+        if (person) updateRabidHunter(world, hunter, person, obstacles, motion, dt);
+        else hunter.actor.moving = false;
+      }
+      if (hunter.prey) {
+        fleeing.add(hunter.target);
+        active.push(hunter.prey);
+      }
+      active.push(hunter.actor);
+    }
+    world.biteSplashes = world.biteSplashes.filter(splash => motion - splash.started < 0.65);
+    const actors = ambient.filter(actor => !world.rabidAnimals.has(actor.animal) &&
+      !world.deadResidents.has(actor.resident) && !fleeing.has(actor.resident));
+    actors.push(...active, ...world.deadResidents.values(), ...world.biteSplashes);
+    return actors.sort((a, b) => a.y - b.y);
+  }
+
   function drawGroundActor(g, actor, motion) {
+    if (actor.kind === 'fireDamage') {
+      const { fire, x, y } = actor;
+      if (motion >= fire.ashAt) drawAsh(g, x, y, fire.radius);
+      else {
+        g.save();
+        if (motion >= fire.smokeAt) g.filter = 'grayscale(0.88) brightness(0.44)';
+        drawGroundActor(g, actor.actor, motion);
+        g.restore();
+        drawBurnEffect(g, fire, x, y, motion);
+      }
+      return;
+    }
+    if (actor.kind === 'fallenBird') {
+      const { bird, fire } = actor;
+      if (!fire) drawFallenBird(g, bird, actor.colors, motion);
+      else if (motion >= fire.ashAt) drawAsh(g, bird.landing.x, bird.landing.y, fire.radius);
+      else {
+        const { x, y } = fallingBirdPosition(bird, motion);
+        g.save();
+        if (motion >= fire.smokeAt) g.filter = 'grayscale(1) brightness(0.40)';
+        drawFallenBird(g, bird, actor.colors, motion);
+        g.restore();
+        drawBurnEffect(g, fire, x, y, motion);
+      }
+      return;
+    }
+    if (actor.kind === 'deadPerson') {
+      drawDeadResident(g, actor);
+      return;
+    }
+    if (actor.kind === 'biteSplash') {
+      drawBloodBurst(g, actor.droplets, actor.x, actor.y - 6, motion - actor.started);
+      return;
+    }
     if (actor.alpha < 0.01) return;
     if (actor.kind === 'leafParticle') {
       g.globalAlpha = actor.alpha;
@@ -2678,15 +3039,19 @@
       drawCampfire(g, actor, motion);
       return;
     }
-    const scale = mix(0.58, 1.02, clamp((actor.y - 151) / 110));
-    const stride = actor.moving ? Math.sin(motion * (actor.kind === 'hare' ? 15 : 9) + actor.offset) : 0;
+    const scale = groundActorScale(actor.y);
+    const strideRate = actor.fleeing || actor.rabid ? 38 : actor.ranger ? 19 : actor.kind === 'hare' ? 15 : 9;
+    const stride = actor.moving ? Math.sin(motion * strideRate + actor.offset) * (actor.fleeing ? 1.6 : 1) : 0;
     const hop = actor.kind === 'hare' ? Math.max(0, stride) * 3 : 0;
+    const lunge = actor.biting ? (1 - smooth((motion - actor.biteAt) / 0.21)) * 3 : 0;
     g.save();
     g.globalAlpha = actor.alpha * 0.26;
     ellipse(g, '#172b2a', actor.x + 1, actor.y, (actor.kind === 'bear' ? 7 : 4) * scale, scale * 1.3);
     g.globalAlpha = actor.alpha;
-    g.translate(Math.round(actor.x), Math.round(actor.y));
+    g.translate(Math.round(actor.x + actor.direction * lunge), Math.round(actor.y));
     g.scale(actor.direction * scale, scale);
+    if (actor.fleeing) g.rotate(0.22);
+    if (actor.attacked) g.rotate(-0.23 + Math.sin(motion * 29) * 0.16);
     if (actor.kind === 'dog' && actor.sleeping) {
       ellipse(g, actor.coat, 0, -2, 4, 2);
       pixels(g, actor.patch, -2, -2, 3, 2);
@@ -2737,12 +3102,17 @@
         pixels(g, '#7d898a', 6 - bend, -1, 3, 2);
         if (Math.sin(motion * 4) > 0.7) pixels(g, actor.activity === 'shovel' ? '#d8e4ed' : '#746040', 8, -2, 2);
       }
+      if (actor.ranger) {
+        pixels(g, '#eec86d', 1, -8, 2);
+        pixels(g, '#61382d', -3, -11, 2, 6);
+        pixels(g, '#a54437', -4, -10, 2, 5);
+        pixels(g, '#a57e4c', -2, -15, 5, 2);
+        pixels(g, '#e5b96c', -3, -13, 7);
+      }
     } else {
       const kind = actor.kind;
       const large = kind === 'bear' || kind === 'deer';
-      const body = kind === 'bear' ? 10 : kind === 'deer' ? 9 : kind === 'hare' ? 5 : 7;
-      const height = kind === 'bear' ? 6 : kind === 'hare' ? 4 : 4;
-      const legs = kind === 'deer' ? 6 : large ? 3 : 2;
+      const { body, height, legs } = animalDimensions(kind);
       const base = -legs - hop;
       for (const x of [-body / 2 + 1, body / 2 - 1]) {
         trace(g, actor.coat, x, base, x + stride * (large ? 1 : 1.5), -hop);
@@ -2756,12 +3126,14 @@
         trace(g, '#c8ba93', 3, base - 13, 1, base - 14);
         trace(g, '#c8ba93', 6, base - 11, 8, base - 15);
         trace(g, '#c8ba93', 7, base - 13, 9, base - 14);
-        pixels(g, '#303a36', 8, base - 9);
+        pixels(g, actor.rabid ? '#ff5247' : '#303a36', 8, base - 9);
+        if (actor.biting) pixels(g, '#ecdece', 9, base - 7, 2);
       } else {
         const head = body * 0.52;
         ellipse(g, actor.coat, head, base - height, kind === 'bear' ? 3 : 2, 2);
         pixels(g, actor.patch, head + 1, base - height + 1, kind === 'wolf' ? 3 : 2);
-        pixels(g, '#333931', head + (kind === 'wolf' ? 3 : 2), base - height);
+        pixels(g, actor.rabid ? '#ff5247' : '#333931', head + (kind === 'wolf' ? 3 : 2), base - height);
+        if (actor.biting) pixels(g, '#ecdece', head + 2, base - height + 2, 2);
         const ear = kind === 'hare' ? 5 : kind === 'bear' ? 2 : 3;
         pixels(g, actor.coat, head - 1, base - height - ear, 1, ear);
         pixels(g, actor.coat, head + 1, base - height - ear + 1, 1, ear);
@@ -2777,6 +3149,46 @@
         if (kind === 'hare') pixels(g, actor.patch, -4, base - 2, 2, 2);
       }
     }
+    g.restore();
+    if (actor.ranger) drawFlamethrower(g, actor, scale);
+  }
+
+  function drawFlamethrower(g, actor, scale) {
+    g.save();
+    g.translate(actor.x, actor.y - 7 * scale);
+    g.rotate(actor.angle);
+    g.scale(scale, scale);
+    pixels(g, '#2c3031', 2, -1, 9, 3);
+    pixels(g, '#878c82', 6, -1, 5);
+    pixels(g, '#bd7a44', 4, 1, 2, 2);
+    pixels(g, '#efba6a', 10, 0);
+    g.restore();
+  }
+
+  function groundActorScale(y) {
+    return mix(0.58, 1.02, clamp((y - 151) / 110));
+  }
+
+  function animalDimensions(kind) {
+    return { body: kind === 'bear' ? 10 : kind === 'deer' ? 9 : kind === 'hare' ? 5 : 7,
+      height: kind === 'bear' ? 6 : 4, legs: kind === 'deer' ? 6 : kind === 'bear' ? 3 : 2 };
+  }
+
+  function drawDeadResident(g, actor) {
+    const { x, y } = actor;
+    const scale = groundActorScale(y);
+    ellipse(g, '#352a27', x, y + 1, 8 * scale, 2 * scale);
+    ellipse(g, '#732b33', x + actor.direction * 2 * scale, y, 5 * scale, 1.4 * scale);
+    g.save();
+    g.translate(Math.round(x), Math.round(y));
+    g.scale(actor.direction * scale, scale);
+    trace(g, '#444953', -2, -2, -7, -1, 2);
+    pixels(g, '#3b3936', -8, -2, 2, 2);
+    pixels(g, actor.shirt, -3, -4, 7, 4);
+    pixels(g, actor.skin, 4, -3, 4, 3);
+    pixels(g, actor.hair, 7, -4, 2, 3);
+    trace(g, actor.skin, 2, -1, 4, 1);
+    pixels(g, '#862d38', 3, -1, 2);
     g.restore();
   }
 
@@ -2853,7 +3265,7 @@
     const distance = age * type.speed;
     const x = direction > 0 ? -78 + distance : W + 78 - distance;
     const y = altitude + slope * (distance - W / 2) + Math.sin(age * 0.17) * 7;
-    return { x, y, direction, age, visible: age < crossing, depth: between(random, 0.82, 1.17) };
+    return { x, y, direction, cycle, visible: age < crossing, depth: between(random, 0.82, 1.17) };
   }
 
   function memberFlight(flock, member, flight, motion) {
@@ -2953,6 +3365,8 @@
   }
 
   function drawFlocks(g, world, hour, motion, weather, sun, moon) {
+    world.visibleBirds.length = 0;
+    world.flameFlyers.length = 0;
     if (season === 'winter') return;
     const daytime = smooth((hour - 5.4) / 1.2) * smooth((20.3 - hour) / 1.4);
     for (const flock of world.flocks) {
@@ -2963,8 +3377,14 @@
       if (!flight.visible) continue;
       const shades = birdColors(type, sun, moon, weather.fog);
       for (const member of flock.members) {
+        if (world.birdHits.get(member) === flight.cycle) continue;
         const pose = memberFlight(flock, member, flight, motion);
         if (pose.x < -22 || pose.x > W + 22) continue;
+        if (presence >= 0.16) {
+          const flyer = { ...pose, species: flock.species, member, cycle: flight.cycle };
+          world.flameFlyers.push(flyer);
+          if (flock.species !== 'bat') world.visibleBirds.push(flyer);
+        }
         const beat = motion * type.flap * Math.PI * 2 + member.phase;
         const glide = type.flap < 3 && Math.sin(motion * 0.47 + member.phase) > 0.35;
         const wing = glide ? 0.15 + Math.sin(motion * 1.1 + member.phase) * 0.15 : Math.sin(beat);
@@ -2982,6 +3402,773 @@
           }
         }
         g.restore();
+      }
+    }
+  }
+
+  function readPropPixels(sprites) {
+    const g = makeCanvas().getContext('2d', { willReadFrequently: true });
+    for (const sprite of sprites) g.drawImage(sprite.canvas, sprite.left, sprite.top);
+    return g.getImageData(0, 0, W, H).data;
+  }
+
+  function canAimAt(world, { x, y }) {
+    const col = Math.floor(x);
+    const row = Math.floor(y);
+    return col >= 0 && col < W && row >= 0 && y < world.fringe(x) &&
+      world.propPixels[(row * W + col) * 4 + 3] < 128;
+  }
+
+  function birdLanding(world, bird, random) {
+    const targetX = clamp(bird.x + bird.direction * between(random, 54, 88), 38, W - 38);
+    const targetY = between(random, 194, 237);
+    const { propPixels } = world;
+    let landing;
+    let closest = Infinity;
+    for (let y = 178; y <= 258; y += 4) {
+      for (let x = 28; x <= W - 28; x += 4) {
+        const distance = Math.hypot(x - targetX, (y - targetY) * 1.35);
+        if (distance >= closest || !clearGround(world, x, y, 6)) continue;
+        const covered = [-5, 0, 5].some(dx => [-4, 0, 3].some(dy =>
+          propPixels[((y + dy) * W + x + dx) * 4 + 3] > 128));
+        if (covered || world.fallenBirds.some(other =>
+          Math.hypot(other.landing.x - x, other.landing.y - y) < 9)) continue;
+        landing = { x, y };
+        closest = distance;
+      }
+    }
+    return landing || { x: Math.round(targetX), y: 260 };
+  }
+
+  function fireAt(world, point, motion) {
+    playSceneSound('shot', 'impact', point.x);
+    let hit;
+    let nearest = 1;
+    for (const bird of world.visibleBirds) {
+      const width = bird.species === 'stork' ? 10 : bird.species === 'sparrow' || bird.species === 'tit' ? 5 : 7;
+      const distance = ((point.x - bird.x) / (width * bird.scale + 2)) ** 2 +
+        ((point.y - bird.y) / (5 * bird.scale + 2)) ** 2;
+      if (distance >= nearest) continue;
+      nearest = distance;
+      hit = bird;
+    }
+    const shot = { ...point, started: motion };
+    world.shots.push(shot);
+    if (!hit) return;
+
+    const random = randomFrom(hash(world.code + '/падение/' + world.fallenBirds.length));
+    dropBird(world, hit, motion, random);
+    shot.impact = hit;
+    shot.droplets = makeBloodDroplets(random, hit.direction, 13);
+  }
+
+  function dropBird(world, bird, motion, random) {
+    world.birdHits.set(bird.member, bird.cycle);
+    const falling = { ...bird, started: motion, landing: birdLanding(world, bird, random),
+      duration: between(random, 1.05, 1.5), turns: between(random, 3.2, 4.3), landed: false };
+    world.fallenBirds.push(falling);
+    return falling;
+  }
+
+  function makeBloodDroplets(random, direction, count, force = 1) {
+    return Array.from({ length: count }, (_, i) => {
+      const angle = between(random, 0, Math.PI * 2);
+      const speed = between(random, 14, 57);
+      return { vx: (Math.cos(angle) * speed + direction * 11) * force, vy: (Math.sin(angle) * speed - 10) * force,
+        life: between(random, 0.27, 0.64), size: i < Math.floor(count / 3) ? 2 : 1,
+        color: pick(random, ['#671b26', '#a72e3a', '#d6514e']) };
+    });
+  }
+
+  function drawBloodBurst(g, droplets, x, y, age) {
+    for (const drop of droplets) {
+      if (age >= drop.life) continue;
+      g.globalAlpha = 1 - smooth((age / drop.life - 0.57) / 0.43);
+      pixels(g, drop.color, x + drop.vx * age, y + drop.vy * age + 60 * age * age, drop.size, 1);
+    }
+    g.globalAlpha = 1;
+  }
+
+  function drawShots(g, world, motion) {
+    world.shots = world.shots.filter(shot => motion - shot.started < 0.65);
+    for (const shot of world.shots) {
+      const age = motion - shot.started;
+      if (age < 0.18) {
+        const spread = 2 + age * 24;
+        g.globalAlpha = 1 - age / 0.18;
+        pixels(g, '#f9deaf', shot.x - spread - 1, shot.y, 2);
+        pixels(g, '#f9deaf', shot.x + spread, shot.y, 2);
+        pixels(g, '#f9deaf', shot.x, shot.y - spread - 1, 1, 2);
+        pixels(g, '#f9deaf', shot.x, shot.y + spread, 1, 2);
+      }
+      if (shot.droplets) drawBloodBurst(g, shot.droplets, shot.impact.x, shot.impact.y, age);
+    }
+    g.globalAlpha = 1;
+  }
+
+  function drawFallenBird(g, bird, colors, motion) {
+    const age = motion - bird.started;
+    const { landing, species, scale } = bird;
+    if (!bird.landed) {
+      const t = clamp(age / bird.duration);
+      const phase = t * bird.turns * Math.PI * 2;
+      const envelope = Math.sin(Math.PI * t);
+      const { x, y } = fallingBirdPosition(bird, motion);
+      const dx = landing.x - bird.x;
+      const direction = Math.sign(dx) || bird.direction;
+      const angle = Math.atan2(landing.y - bird.y, Math.abs(dx)) * direction;
+      g.save();
+      g.translate(Math.round(x), Math.round(y));
+      g.rotate(angle * smooth(t * 8) + Math.sin(phase) * envelope * 0.71);
+      g.scale(direction * scale, scale * (0.17 + 0.83 * Math.cos(phase)));
+      if (species === 'bat') drawBat(g, colors, -0.53 + Math.sin(phase) * 0.32, Math.sin(phase));
+      else drawFlyingBird(g, species, colors, -0.53 + Math.sin(phase) * 0.32, Math.sin(phase));
+      pixels(g, '#87232d', 0, 1, 2);
+      g.restore();
+      return;
+    }
+
+    const spread = smooth((age - bird.duration) / 0.48);
+    ellipse(g, '#292520', landing.x, landing.y + 1, 5 * scale, 1.3 * scale);
+    ellipse(g, '#68252a', landing.x + scale, landing.y + 1, mix(2, 5, spread) * scale, 1.3 * scale);
+    if (spread > 0.35) pixels(g, '#8c3236', landing.x + bird.direction * 5 * scale, landing.y + 2, 2);
+    g.save();
+    g.translate(landing.x, landing.y);
+    g.scale(bird.direction * scale, scale);
+    polygon(g, colors.tip, [[-2, -2], [-7, 0], [-6, 1], [-2, 0]]);
+    pixels(g, colors.body, -3, -3, 6, 4);
+    polygon(g, colors.wing, [[0, -3], [-1, -1], [-5, 2], [-2, 2], [2, -1]]);
+    pixels(g, colors.body, 2, -2, species === 'stork' ? 4 : 2, 3);
+    pixels(g, colors.beak, species === 'stork' ? 6 : 4, 0, species === 'stork' ? 4 : 2);
+    pixels(g, colors.tip, 3, -1);
+    pixels(g, '#922d36', 1, 0, 2);
+    g.restore();
+  }
+
+  function fallingBirdPosition(bird, motion) {
+    if (bird.landed) return bird.landing;
+    const t = clamp((motion - bird.started) / bird.duration);
+    const phase = t * bird.turns * Math.PI * 2;
+    const envelope = Math.sin(Math.PI * t);
+    return { x: mix(bird.x, bird.landing.x, t) + Math.sin(phase) * envelope * 10,
+      y: mix(bird.y, bird.landing.y - 1, t * (0.43 + 0.57 * t)) + Math.cos(phase) * envelope * 5 };
+  }
+
+  function actorFireKey(actor) {
+    return actor.resident || actor.animal || actor.bird || actor.camp;
+  }
+
+  function inFlame(jet, x, y, padding = 0) {
+    const dx = x - jet.x;
+    const dy = y - jet.y;
+    const depth = dx * jet.dx + dy * jet.dy;
+    return depth >= -padding && depth <= flameRange + padding &&
+      Math.abs(dx * jet.dy - dy * jet.dx) <= 3 + Math.max(0, depth) * 0.21 + padding;
+  }
+
+  function makeFire(kind, motion, radius, height) {
+    const duration = kind === 'prop' ? 3.5 + radius * 0.035 : kind === 'ground' ? 1.25 : 2.5;
+    return { kind, radius, height, started: motion, smokeAt: motion + duration,
+      ashAt: motion + duration + (kind === 'prop' ? 2.3 : 1.65) };
+  }
+
+  function igniteGroundActor(world, actor, key, jet, motion) {
+    const bird = actor.kind === 'fallenBird' ? actor.bird : null;
+    const place = bird ? fallingBirdPosition(bird, motion) : actor;
+    const living = actor.kind === 'person' || Boolean(actor.animal);
+    const lift = actor.kind === 'person' ? 7 : living ? 4 : 1;
+    if (!inFlame(jet, place.x, place.y - lift, living ? 4 : 3)) return;
+    const kind = living ? 'living' : bird ? 'bird' : 'object';
+    const fire = makeFire(kind, motion, living ? 6 : 5, living ? 15 : 9);
+    fire.actor = { ...actor, fleeing: living, working: false, sleeping: false, seated: false,
+      attacked: false, biting: false, ranger: false, alpha: 1 };
+    if (living && !fire.actor.speed) fire.actor.speed = 5;
+    fire.heading = Math.atan2(place.y - jet.y, place.x - jet.x);
+    world.fires.set(key, fire);
+    if (actor.animal) {
+      const hunt = world.rabidAnimals.get(actor.animal);
+      if (hunt?.prey && !world.fires.has(hunt.target)) {
+        world.residentPoses.set(hunt.target, { ...hunt.prey, fleeing: false, attacked: false, moving: false });
+      }
+      world.rabidAnimals.delete(actor.animal);
+    }
+  }
+
+  function igniteJetTargets(world, actors, motion) {
+    const jet = world.jet;
+    if (!jet || !world.ranger) return;
+    for (const actor of actors) {
+      const key = actorFireKey(actor);
+      if (key && key !== world.ranger.resident && !world.fires.has(key) && (actor.alpha ?? 1) >= 0.16) {
+        igniteGroundActor(world, actor, key, jet, motion);
+      }
+    }
+    for (const flyer of world.flameFlyers) {
+      if (!inFlame(jet, flyer.x, flyer.y, 3)) continue;
+      const random = randomFrom(hash(world.code + '/огонь/' + world.fallenBirds.length));
+      const bird = dropBird(world, flyer, motion, random);
+      const fire = makeFire('bird', motion, 5, 9);
+      fire.actor = { kind: 'fallenBird', bird, y: bird.landing.y };
+      world.fires.set(bird, fire);
+    }
+
+    const left = Math.max(0, Math.floor(Math.min(jet.x, jet.x + jet.dx * flameRange) - 14));
+    const right = Math.min(W - 1, Math.ceil(Math.max(jet.x, jet.x + jet.dx * flameRange) + 14));
+    const top = Math.max(0, Math.floor(Math.min(jet.y, jet.y + jet.dy * flameRange) - 14));
+    const bottom = Math.min(H - 1, Math.ceil(Math.max(jet.y, jet.y + jet.dy * flameRange) + 14));
+    for (const [i, item] of world.sceneItems.entries()) {
+      if (item.ash || world.fires.has(item)) continue;
+      const sprite = layers.night.sprites[i];
+      const x0 = Math.max(left, sprite.left);
+      const x1 = Math.min(right, sprite.left + sprite.canvas.width - 1);
+      const y0 = Math.max(top, sprite.top);
+      const y1 = Math.min(bottom, sprite.top + sprite.canvas.height - 1);
+      if (x0 > x1 || y0 > y1) continue;
+      const data = spritePixels(sprite);
+      let hit = false;
+      for (let y = y0; y <= y1 && !hit; y++) {
+        for (let x = x0; x <= x1; x++) {
+          if (data[((y - sprite.top) * sprite.canvas.width + x - sprite.left) * 4 + 3] >= 128 && inFlame(jet, x, y)) {
+            hit = true;
+            break;
+          }
+        }
+      }
+      if (!hit) continue;
+      item.burning = true;
+      delete item.cataclysm;
+      shadowPosition = -1;
+      const radius = clamp((item.width || sprite.canvas.width - 13) * 0.42, 3, 24);
+      const height = clamp((item.height || item.y - sprite.top) * 0.7, 6, 64);
+      world.fires.set(item, makeFire('prop', motion, radius, height));
+    }
+
+    const grid = 11;
+    for (let y = Math.ceil(top / grid) * grid; y <= bottom; y += grid) {
+      for (let x = Math.ceil(left / grid) * grid; x <= right; x += grid) {
+        const key = y * W + x;
+        if (world.groundFires.has(key) || y < world.fringe(x) + 2 || !inFlame(jet, x, y - 2, 2)) continue;
+        world.groundFires.set(key, { ...makeFire('ground', motion, 5, 5), x, y });
+      }
+    }
+  }
+
+  function applyFireDamage(world, actors, motion, dt) {
+    const visible = actors.filter(actor => actor.bird || !world.fires.has(actorFireKey(actor)));
+    let changed = false;
+    const obstacles = world.fires.size ? groundObstacles(world) : [];
+    for (const [key, fire] of world.fires) {
+      if (fire.kind === 'prop') {
+        if (motion < fire.ashAt) continue;
+        key.ash = fire.radius;
+        delete key.burning;
+        world.fires.delete(key);
+        const index = world.sceneItems.indexOf(key);
+        for (const [phase, layer] of Object.entries(layers)) {
+          layer.sprites[index] = paintSceneSprite(key, seasonalColors[phase]);
+        }
+        changed = true;
+      } else if (fire.kind !== 'bird') {
+        const actor = fire.actor;
+        if (fire.kind === 'living' && motion < fire.ashAt && dt > 0) {
+          const burning = motion < fire.smokeAt;
+          const runningSpeed = actor.speed * 5;
+          const travel = (burning ? runningSpeed : runningSpeed / 10) * dt;
+          const steps = Math.max(1, Math.ceil(travel / 3.5));
+          actor.fleeing = burning;
+          for (let step = 0; step < steps; step++) {
+            const x = actor.x;
+            const y = actor.y;
+            moveDuringChase(world, actor, fire.heading, travel / steps, obstacles);
+            if (!actor.moving) break;
+            fire.heading = Math.atan2(actor.y - y, actor.x - x);
+          }
+        } else if (motion >= fire.ashAt) actor.moving = false;
+        visible.push({ kind: 'fireDamage', x: actor.x, y: actor.y, alpha: 1, fire, actor });
+      }
+    }
+    if (changed) rebuildSceneMasks();
+    for (const actor of visible) {
+      if (actor.bird) actor.fire = world.fires.get(actor.bird);
+    }
+    return visible.sort((a, b) => a.y - b.y);
+  }
+
+  function drawAsh(g, x, y, radius, phase = 'day') {
+    const [shade, ash, fleck] = ['#252427', '#4b4748', '#797272'].map(ink => seasonTone(ink, phase));
+    ellipse(g, shade, x, y, radius, Math.max(1.5, radius * 0.25));
+    ellipse(g, ash, x - radius * 0.12, y - radius * 0.12, radius * 0.72, Math.max(1, radius * 0.22));
+    pixels(g, fleck, x - radius * 0.43, y - radius * 0.2, Math.max(1, radius * 0.24));
+    pixels(g, fleck, x + radius * 0.23, y);
+  }
+
+  function drawBurnEffect(g, fire, x, y, motion) {
+    const { radius, height, started, smokeAt, ashAt } = fire;
+    if (motion >= ashAt) return;
+    if (motion >= smokeAt) {
+      const strength = 1 - smooth((motion - smokeAt) / (ashAt - smokeAt));
+      const count = Math.ceil(clamp(radius * 0.65, 3, 16));
+      for (let i = 0; i < count; i++) {
+        const life = wrap((motion - smokeAt) * 0.72 + i * 0.618, 1);
+        const px = x + Math.sin(i * 7.12 + life * 4) * radius * 0.54 + life * 8;
+        const py = y - height * 0.36 - life * Math.max(13, height * 1.2);
+        g.globalAlpha = strength * (1 - life) * 0.91;
+        ellipse(g, '#f8ffff', px, py, 2 + life * (3 + radius * 0.27), 2 + life * 4);
+        ellipse(g, '#ffffff', px - 1, py - 1, 1.4 + life * 2, 1 + life * 2);
+      }
+    } else {
+      const strength = smooth((motion - started + 0.045) * 8);
+      const count = Math.ceil(clamp(radius * 0.72, 3, 15));
+      for (let i = 0; i < count; i++) {
+        const px = x + (i / (count - 1) * 2 - 1) * radius * 0.85;
+        const wave = Math.sin(i * 3.1 + motion * 23);
+        const h = height * (0.56 + (i % 3) * 0.16 + wave * 0.17) * strength;
+        const width = 1.6 + radius * 0.11;
+        const base = y - (i % 3) * height * 0.08;
+        polygon(g, '#eb6031', [[px - width, base], [px - width * 0.7, base - h * 0.52], [px + wave * width, base - h],
+          [px + width, base - h * 0.33], [px + width * 0.8, base]]);
+        polygon(g, '#ffd47a', [[px - width * 0.53, base], [px + wave, base - h * 0.61], [px + width * 0.46, base]]);
+        if (h > 4) pixels(g, '#fff2ad', px, base - h * 0.21);
+      }
+    }
+    g.globalAlpha = 1;
+  }
+
+  function drawBurningProp(g, item, fire, motion, drawSprite) {
+    const collapsing = smooth((motion - fire.smokeAt) / (fire.ashAt - fire.smokeAt));
+    g.save();
+    g.translate(0, item.y * collapsing * 0.73);
+    g.scale(1, 1 - collapsing * 0.73);
+    g.filter = 'saturate(' + (1 - collapsing) + ') brightness(' + (1 - collapsing * 0.73) + ')';
+    drawSprite();
+    g.restore();
+    drawBurnEffect(g, fire, item.x, item.y, motion);
+  }
+
+  function drawScorchedGround(g, world, motion) {
+    for (const fire of world.groundFires.values()) {
+      ellipse(g, '#50423a', fire.x, fire.y, 6.3, 3.4);
+      if (motion >= fire.ashAt) pixels(g, '#70665d', fire.x - 2, fire.y, 2);
+      else if ((fire.x + fire.y) % 4 === 0) drawBurnEffect(g, fire, fire.x, fire.y, motion);
+    }
+  }
+
+  function drawRangerJet(g, jet, motion) {
+    const { x, y, dx, dy } = jet;
+    for (let i = 0; i < 48; i++) {
+      const age = wrap(motion * 2.9 + i * 0.618, 1);
+      const distance = age * flameRange;
+      const side = Math.sin(i * 3.76 + motion * 20) * age * 9.7;
+      const radius = 1.8 + age * 4;
+      g.globalAlpha = (1 - age * 0.74) * 0.78;
+      const color = age < 0.16 ? '#fff6c3' : age < 0.49 ? '#ffc668' : age < 0.76 ? '#ff8a42' : '#d64f30';
+      ellipse(g, color, x + dx * distance - dy * side, y + dy * distance + dx * side, radius, radius * 0.8);
+    }
+    g.globalAlpha = 1;
+    trace(g, '#fff3b8', x, y, x + dx * 10, y + dy * 10, 2);
+  }
+
+  const cataclysmTypes = {
+    lightning: { warning: 0.75, damage: 2.8, rubble: ['#222124', '#39302d', '#6a4735'] },
+    meteor: { warning: 1.1, damage: 1.45, rubble: ['#382524', '#66433b', '#bd5938'] },
+    ice: { warning: 1.05, damage: 1.65, rubble: ['#315367', '#6ba9bb', '#c9f3f4'] },
+    tornado: { warning: 1.3, damage: 1.85, rubble: ['#45352d', '#8c6443', '#bf9261'] },
+    volcano: { warning: 1.15, damage: 2.5, rubble: ['#3e2a2c', '#6b4240', '#b56a4a'] },
+    sinkhole: { warning: 0.85, damage: 1.85, rubble: ['#2e2220', '#5b4030', '#9a7653'] },
+    earthquake: { warning: 0.95, damage: 1.75, rubble: ['#3e3730', '#726251', '#a89674'] }
+  };
+
+  function sceneItemAt(world, point) {
+    const x = Math.floor(point.x);
+    const y = Math.floor(point.y);
+    if (x < 0 || x >= W || y < 0 || y >= H || world.propPixels[(y * W + x) * 4 + 3] < 128) return null;
+    const sprites = layers.night.sprites;
+    for (let i = sprites.length - 1; i >= 0; i--) {
+      const sprite = sprites[i];
+      const { width, height } = sprite.canvas;
+      const dx = x - sprite.left;
+      const dy = y - sprite.top;
+      if (dx < 0 || dx >= width || dy < 0 || dy >= height) continue;
+      if (spritePixels(sprite)[(dy * width + dx) * 4 + 3] < 128) continue;
+      return world.sceneItems[i];
+    }
+    return null;
+  }
+
+  function spritePixels(sprite) {
+    const { width, height } = sprite.canvas;
+    return sprite.hitPixels ??= sprite.canvas.getContext('2d').getImageData(0, 0, width, height).data;
+  }
+
+  function residentAt(world, point, prop) {
+    for (let i = world.groundActors.length - 1; i >= 0; i--) {
+      const actor = world.groundActors[i];
+      if (actor.kind !== 'person' || !actor.resident || actor.attacked || actor.alpha < 0.2 ||
+        (prop && actor.y <= prop.y)) continue;
+      const scale = groundActorScale(actor.y);
+      const height = actor.seated ? 12 : 16;
+      const up = actor.y - point.y;
+      if (Math.abs(actor.x - point.x) <= 4 * scale + 1 && up >= -1 && up <= height * scale) return actor;
+    }
+    return null;
+  }
+
+  function animalAt(world, point, prop) {
+    for (let i = world.groundActors.length - 1; i >= 0; i--) {
+      const actor = world.groundActors[i];
+      if (!actor.animal || actor.alpha < 0.2 || (prop && actor.y <= prop.y)) continue;
+      const scale = groundActorScale(actor.y);
+      const { body, height, legs } = animalDimensions(actor.kind);
+      const dx = (point.x - actor.x) * actor.direction / scale;
+      const dy = (actor.y - point.y) / scale;
+      const tail = Math.max(body * 0.7 + 2, actor.kind === 'dog' || actor.kind === 'fox' ? 10 : 0);
+      const head = Math.max(body * 0.55 + 4, actor.kind === 'deer' ? 10 : 0);
+      const top = actor.sleeping ? 6 : legs + height + (actor.kind === 'deer' || actor.kind === 'hare' ? 7 : 4);
+      if (dx >= -tail && dx <= head && dy >= -1.5 && dy <= top) return actor;
+    }
+    return null;
+  }
+
+  function startCataclysm(world, house, motion) {
+    if (house.cataclysm || houseHasDamage(house)) return;
+    if (!world.cataclysmDeck.length) world.cataclysmDeck = Object.keys(cataclysmTypes);
+    const index = integer(world.cataclysmRandom, 0, world.cataclysmDeck.length - 1);
+    const [kind] = world.cataclysmDeck.splice(index, 1);
+    const random = randomFrom(house.seed);
+    const { front, depth, wall, roof, rise } = dimensions(house);
+    house.cataclysm = { kind, started: motion, struck: false,
+      half: (front + depth) / 2 + 3, roofY: house.y - wall - roof - rise,
+      side: house.x < W / 2 ? 1 : -1,
+      particles: Array.from({ length: 25 }, () => ({
+        x: between(random, -1, 1), speed: between(random, 11, 43),
+        lift: between(random, 14, 66), size: integer(random, 1, 4), phase: random()
+      })) };
+    playSceneSound(kind, 'warning', house.x);
+  }
+
+  function houseHasDamage(house) {
+    return Boolean(house.ash || house.burning || house.ruin || house.cataclysm?.struck);
+  }
+
+  function updateCataclysms(world, motion) {
+    let impacted = false;
+    let finished = false;
+    for (const house of world.houses) {
+      const event = house.cataclysm;
+      if (!event) continue;
+      const { warning, damage } = cataclysmTypes[event.kind];
+      const age = motion - event.started;
+      if (age >= warning + damage) {
+        house.ruin = event.kind;
+        delete house.cataclysm;
+        const index = world.sceneItems.indexOf(house);
+        for (const [phase, layer] of Object.entries(layers)) {
+          layer.sprites[index] = paintSceneSprite(house, seasonalColors[phase]);
+        }
+        finished = true;
+      } else if (age >= warning && !event.struck) {
+        event.struck = true;
+        playSceneSound(event.kind, 'impact', house.x);
+        impacted = true;
+      }
+    }
+    if (finished) {
+      rebuildSceneMasks();
+      updateSceneCursor();
+    } else if (impacted) {
+      world.moonMasks = paintMoonlight(world);
+      shadowPosition = -1;
+    }
+  }
+
+  function drawSceneSprite(g, sprite, other, blend) {
+    g.drawImage(sprite.canvas, sprite.left, sprite.top);
+    if (!other) return;
+    const alpha = g.globalAlpha;
+    g.globalAlpha = alpha * blend;
+    g.drawImage(other.canvas, other.left, other.top);
+    g.globalAlpha = alpha;
+  }
+
+  function drawCracks(g, x, y, half, strength, ink) {
+    for (const side of [-1, 1]) {
+      const reach = half * side * strength;
+      trace(g, ink, x, y, x + reach * 0.41, y + 3 * strength);
+      trace(g, ink, x + reach * 0.41, y + 3 * strength, x + reach * 0.73, y - 2 * strength);
+      trace(g, ink, x + reach * 0.73, y - 2 * strength, x + reach, y + side * 6 * strength);
+      trace(g, ink, x + reach * 0.41, y + 3 * strength, x + reach * 0.61, y + 8 * strength);
+    }
+  }
+
+  function drawQuakeFault(g, house, half, progress, phase) {
+    const { x, y } = house;
+    const endX = x + half * 0.85 * progress;
+    const endY = y + 13 * progress;
+    const turnX = x + half * 0.24 * progress;
+    const turnY = y + 8 * progress;
+    const [edge, dark, light] = ['#59443a', '#3c302c', '#aa8866'].map(ink => seasonTone(ink, phase));
+    drawCracks(g, x, y + 2, half + 13, progress, edge);
+    trace(g, edge, x - half * 0.26 * progress, y + 1, turnX, turnY, 2);
+    trace(g, dark, turnX, turnY, endX, endY, 2);
+    trace(g, light, turnX, turnY + 2, endX, endY + 1);
+  }
+
+  function drawHouseRuins(g, house, kind, palette, progress) {
+    if (progress <= 0) return;
+    const { x, y } = house;
+    const { front, depth, wall } = dimensions(house);
+    const half = (front + depth) * 0.52 + 3;
+    const [dark, mid, pale] = cataclysmTypes[kind].rubble.map(ink => seasonTone(ink, palette.phase));
+    const crater = kind === 'sinkhole' || kind === 'meteor';
+    const height = (kind === 'volcano' ? wall + 6 : kind === 'lightning' ? wall * 0.72 : wall * 0.48) * progress;
+    ellipse(g, mid, x, y + 1, half * progress, 4.5);
+    ellipse(g, dark, x, y, half * 0.89 * progress, crater ? 3.5 : 2.5);
+    if (kind === 'earthquake') drawQuakeFault(g, house, half, progress, palette.phase);
+    if (kind === 'sinkhole') drawCracks(g, x, y, half + 4, progress, dark);
+    if (kind === 'volcano') {
+      polygon(g, dark, [[x - half, y + 2], [x - half * 0.56, y - height * 0.66],
+        [x - half * 0.16, y - height], [x + half * 0.27, y - height * 0.85],
+        [x + half * 0.55, y - height * 0.48], [x + half, y + 2]]);
+      polygon(g, mid, [[x - half * 0.54, y - height * 0.62], [x - half * 0.16, y - height],
+        [x + half * 0.27, y - height * 0.85], [x + half * 0.35, y - height * 0.55], [x, y - 2]]);
+    }
+    const random = randomFrom(house.seed ^ 1187);
+    for (let i = 0; i < 15; i++) {
+      const dx = between(random, -half * 0.9, half * 0.9);
+      const width = integer(random, 2, 7);
+      const raise = between(random, 0.25, 1) * height * (crater ? 0.35 : 1);
+      const px = x + dx * progress;
+      const py = y - raise * (1 - Math.abs(dx) / (half * 1.4));
+      polygon(g, i % 3 === 0 ? mid : dark, [[px - width * 0.5, y + i % 3], [px - 1, py],
+        [px + 2, py - 1], [px + width * 0.5, y + i % 3]]);
+      if (i % 2 === 0) pixels(g, pale, px, py, kind === 'ice' ? 2 : 1);
+    }
+    if (kind === 'lightning') {
+      for (const dx of [-0.42, 0.34]) trace(g, dark, x + half * dx, y, x + half * dx - 1, y - height, 2);
+    }
+  }
+
+  function drawCollapsingWalls(g, house, event, t, drawSprite) {
+    const { x, y } = house;
+    const { wall } = dimensions(house);
+    const spread = smooth(t);
+    const lift = Math.sin(t * Math.PI);
+    for (const section of [-1, 0, 1]) {
+      const roof = section === 0;
+      const drift = roof ? event.side : section;
+      g.save();
+      g.translate(x + drift * (roof ? 30 : 19) * spread, y + (roof ? -30 : -9) * lift + 10 * t);
+      g.rotate(drift * spread * (roof ? 1.4 : 1.04));
+      g.translate(-x, -y);
+      g.beginPath();
+      if (roof) g.rect(x - event.half - 6, event.roofY - 12, event.half * 2 + 12, y - wall - event.roofY + 12);
+      else g.rect(section < 0 ? x - event.half - 6 : x, y - wall, event.half + 6, wall + 7);
+      g.clip();
+      g.globalAlpha = 1 - smooth((t - 0.58) / 0.42);
+      drawSprite();
+      g.restore();
+    }
+  }
+
+  function drawHouseCataclysm(g, house, palette, motion, drawSprite) {
+    const event = house.cataclysm;
+    const { kind, half } = event;
+    const { warning, damage } = cataclysmTypes[kind];
+    const age = motion - event.started;
+    const { x, y } = house;
+    const shake = Math.sin(age * 52) * Math.sin(age * 33);
+    if (!event.struck) {
+      const progress = smooth(age / warning);
+      if (kind === 'earthquake') drawQuakeFault(g, house, half, progress, palette.phase);
+      if (kind === 'sinkhole') {
+        drawCracks(g, x, y + 2, half + 8, progress, '#49382e');
+        ellipse(g, '#392c28', x, y + 1, Math.max(1, half * 0.85 * progress), 2.7);
+      }
+      g.save();
+      if (kind === 'earthquake') g.translate(Math.round(shake * 2), 0);
+      drawSprite();
+      g.restore();
+      return;
+    }
+
+    const t = clamp((age - warning) / damage);
+    const collapse = smooth(t * (kind === 'lightning' || kind === 'volcano' ? 1 : 1.35));
+    if (kind !== 'volcano') drawHouseRuins(g, house, kind, palette, collapse);
+    if (kind === 'tornado') {
+      drawCollapsingWalls(g, house, event, t, drawSprite);
+      return;
+    }
+    g.save();
+    if (kind === 'sinkhole') {
+      g.beginPath();
+      g.rect(x - half - 9, event.roofY - 13, half * 2 + 18, y - event.roofY + 13);
+      g.clip();
+      g.translate(x + shake * (1 - t), y + collapse * (y - event.roofY + 9));
+    } else {
+      g.translate(x + (kind === 'earthquake' ? Math.round(shake * (1 - t) * 5) : 0), y);
+      if (kind === 'earthquake') g.rotate(shake * 0.12 * (1 - t) + event.side * collapse * 0.22);
+      g.scale(1, kind === 'volcano' ? 1 : 1 - collapse * 0.82);
+    }
+    g.translate(-x, -y);
+    g.globalAlpha = 1 - smooth((t - 0.48) / 0.52);
+    if (kind === 'lightning') g.filter = 'brightness(' + mix(1, 0.15, smooth(t * 1.9)) + ') saturate(0.23)';
+    if (kind === 'ice') g.filter = 'grayscale(0.75) brightness(1.45)';
+    drawSprite();
+    g.restore();
+    if (kind === 'volcano') drawHouseRuins(g, house, kind, palette, collapse);
+  }
+
+  function drawLightningStrike(g, house, event, windup, after) {
+    const { x } = house;
+    const cloudY = Math.max(12, event.roofY - 100);
+    g.globalAlpha = 0.78 * smooth(windup * 3) * (1 - smooth(after));
+    ellipse(g, '#3e435d', x, cloudY, 42, 10);
+    ellipse(g, '#5a5c73', x - 16, cloudY - 5, 21, 9);
+    ellipse(g, '#494b62', x + 17, cloudY - 3, 21, 9);
+    if (windup >= 0.89 && after < 0.14) {
+      const points = [[x - 16, cloudY], [x + 5, mix(cloudY, event.roofY, 0.29)],
+        [x - 9, mix(cloudY, event.roofY, 0.46)], [x + 9, mix(cloudY, event.roofY, 0.72)], [x, event.roofY + 2]];
+      g.globalAlpha = (1 - after / 0.14) * 0.27;
+      ellipse(g, '#e3e2ff', x, event.roofY - 3, 31, 23);
+      g.globalAlpha = 1 - after / 0.14;
+      for (let i = 1; i < points.length; i++) {
+        trace(g, '#878fe7', ...points[i - 1], ...points[i], 4);
+        trace(g, '#fff8e8', ...points[i - 1], ...points[i], 2);
+      }
+      trace(g, '#c8ceff', ...points[2], x - 27, event.roofY - 17);
+    }
+    g.globalAlpha = 1;
+  }
+
+  function drawFallingMass(g, house, event, progress) {
+    const ice = event.kind === 'ice';
+    const t = progress * (0.46 + 0.54 * progress);
+    const drift = event.side * (ice ? 26 : 91);
+    const x = house.x + drift * (1 - t);
+    const y = mix(8, event.roofY + 4, t);
+    const ink = ice ? ['#5f9fba', '#c8f3f6', '#efffff'] : ['#6d3b36', '#ec6533', '#ffbf61'];
+    for (const mote of event.particles) {
+      const reach = mote.phase * (ice ? 31 : 53);
+      g.globalAlpha = (1 - mote.phase) * 0.85;
+      const px = x + event.side * reach * (ice ? 0.22 : 0.57) + mote.x * 5;
+      const py = y - reach;
+      trace(g, ink[mote.size % 3], px, py, px + event.side * 2, py - mote.size * 2, mote.size > 2 ? 2 : 1);
+    }
+    g.globalAlpha = 1;
+    polygon(g, ink[0], [[x - 9, y - 4], [x - 3, y - 10], [x + 6, y - 7],
+      [x + 10, y + 1], [x + 4, y + 9], [x - 5, y + 7]]);
+    polygon(g, ink[1], [[x - 9, y - 4], [x - 3, y - 10], [x + 6, y - 7], [x + 3, y + 4], [x - 5, y + 7]]);
+    trace(g, ink[2], x - 6, y - 4, x - 2, y - 8, 2);
+  }
+
+  function drawFunnel(g, house, event, windup, after, motion) {
+    const strength = smooth(windup * 4) * (1 - smooth((after - 0.6) / 1.25));
+    const baseX = house.x + event.side * (1 - windup) * 68 + Math.sin(motion * 7) * 4;
+    g.globalAlpha = 0.9 * strength;
+    for (let i = 0; i < 20; i++) {
+      const t = i / 19;
+      const y = house.y - t * 127;
+      const x = baseX + event.side * t * 29 + Math.sin(t * 8 + motion * 10) * mix(2, 7, t);
+      const width = mix(5, 38, t ** 0.72);
+      ellipse(g, i % 3 ? '#666a63' : '#94958a', x, y, width, mix(2.6, 8, t));
+      pixels(g, '#bab6a2', x + Math.sin(motion * 21 + i) * width * 0.64, y - 1, 4);
+    }
+    for (const mote of event.particles) {
+      const t = wrap(motion * 0.95 + mote.phase, 1);
+      const x = baseX + event.side * t * 29 + Math.sin(motion * 18 + mote.phase * 19) * mix(9, 46, t);
+      pixels(g, mote.size % 2 ? '#453c36' : '#d1b28a', x, house.y - t * 118, mote.size + 1, 2);
+    }
+    g.globalAlpha = 1;
+  }
+
+  function drawEruption(g, house, event, windup, after, motion) {
+    const strength = smooth(windup * 4) * (1 - smooth((after - 0.75) / 1.75));
+    const ventX = house.x + event.side * (event.half + 8);
+    const { y } = house;
+    g.globalAlpha = strength;
+    polygon(g, '#503130', [[ventX - 14, y + 3], [ventX - 6, y - 10],
+      [ventX + 4, y - 12], [ventX + 15, y + 3]]);
+    ellipse(g, '#f68b45', ventX, y - 9, 5, 2.5);
+    for (const mote of event.particles) {
+      const t = wrap(motion * 0.82 + mote.phase, 1);
+      const ashX = mix(ventX, house.x + mote.x * event.half, t);
+      const ashY = mix(y - 9, event.roofY + 17, t) - Math.sin(t * Math.PI) * (43 + mote.lift * 0.48);
+      if (mote.size >= 3) {
+        g.globalAlpha = strength * (0.66 - t * 0.35);
+        ellipse(g, '#574344', ashX, ashY, mote.size + t * 5, mote.size + t * 2);
+      } else {
+        g.globalAlpha = strength * (1 - t * 0.48);
+        trace(g, mote.size === 1 ? '#ffbb55' : '#db602e', ashX, ashY, ashX + event.side * 3, ashY - 3, 2);
+      }
+    }
+    g.globalAlpha = 1;
+  }
+
+  function drawHouseFire(g, house, event, after) {
+    const strength = smooth(after * 3.3) * (1 - smooth((after - 1.45) / 1.35));
+    const { x, y } = house;
+    for (let i = 0; i < 8; i++) {
+      const flicker = 0.79 + Math.sin(after * 24 + i * 3) * 0.21;
+      const px = x + event.half * mix(-0.84, 0.84, i / 7);
+      const base = y - (i % 3) * 3;
+      const height = (y - event.roofY) * strength * flicker * (0.65 + i % 4 * 0.21);
+      if (height < 2) continue;
+      polygon(g, '#d55c2e', [[px - 4, base], [px - 3, base - height * 0.55], [px + flicker, base - height],
+        [px + 4, base - height * 0.36], [px + 3, base]]);
+      polygon(g, '#ffce6b', [[px - 2, base], [px, base - height * 0.56], [px + 2, base]]);
+    }
+    for (const mote of event.particles) {
+      const t = wrap(after * 0.93 + mote.phase, 1);
+      const px = x + mote.x * event.half + t * 13;
+      const py = y - t * (y - event.roofY + mote.lift);
+      g.globalAlpha = strength * (1 - t) * 0.72;
+      if (mote.size >= 3) ellipse(g, '#3c353b', px, py, 3 + t * 7, 2 + t * 4);
+      else pixels(g, '#ffa74d', px, py, mote.size, 2);
+    }
+    g.globalAlpha = 1;
+  }
+
+  function drawImpactDust(g, house, event, after) {
+    if (after < 0 || after > 1.2) return;
+    const { x, y } = house;
+    const [dark, mid, pale] = cataclysmTypes[event.kind].rubble;
+    const flash = 1 - smooth(after / 0.27);
+    if (event.kind === 'meteor' || event.kind === 'ice') {
+      g.globalAlpha = flash * 0.83;
+      ellipse(g, pale, x, mix(event.roofY, y, after * 0.6), event.half * (0.9 + after), 7 + after * 16);
+    }
+    for (const mote of event.particles) {
+      const t = after - mote.phase * 0.18;
+      if (t < 0) continue;
+      const px = x + mote.x * (event.half * 0.5 + mote.speed * t);
+      const py = y - 3 - Math.max(0, t * mote.lift - 44 * t ** 2);
+      g.globalAlpha = (1 - smooth(t / 1.2)) * 0.86;
+      if (mote.size === 4) ellipse(g, mid, px, py, 3 + t * 5, 2 + t * 3);
+      else pixels(g, mote.size === 2 ? dark : pale, px, py, mote.size, 2);
+    }
+    g.globalAlpha = 1;
+  }
+
+  function drawCataclysms(g, world, motion) {
+    for (const house of world.houses) {
+      const event = house.cataclysm;
+      if (!event) continue;
+      const { warning } = cataclysmTypes[event.kind];
+      const after = motion - event.started - warning;
+      const windup = clamp(1 + after / warning);
+      switch (event.kind) {
+        case 'lightning':
+          drawLightningStrike(g, house, event, windup, Math.max(0, after));
+          if (after >= 0) drawHouseFire(g, house, event, after);
+          break;
+        case 'meteor':
+        case 'ice':
+          if (after < 0) drawFallingMass(g, house, event, windup);
+          else drawImpactDust(g, house, event, after);
+          break;
+        case 'tornado': drawFunnel(g, house, event, windup, Math.max(0, after), motion); break;
+        case 'volcano': drawEruption(g, house, event, windup, Math.max(0, after), motion); break;
+        default: drawImpactDust(g, house, event, after);
       }
     }
   }
@@ -3053,6 +4240,7 @@
   const musicVolume = byId('music-volume');
   const music = { context: null, enabled: false, timer: null, bus: null, retiring: [],
     operation: Promise.resolve(), volume: musicVolume.valueAsNumber / 100 * 0.65 };
+  const sceneAudio = { input: null, voices: new Set() };
 
   function musicDegree(score, degree) {
     return score.root + score.scale[wrap(degree, 7)] + Math.floor(degree / 7) * 12;
@@ -3062,7 +4250,6 @@
     const AudioEngine = window.AudioContext || window.webkitAudioContext;
     if (!AudioEngine) throw new Error('unsupported');
     const context = new AudioEngine();
-    music.context = context;
     const random = randomFrom(64064);
     music.noise = context.createBuffer(1, context.sampleRate * 0.5, context.sampleRate);
     const noise = music.noise.getChannelData(0);
@@ -3083,7 +4270,11 @@
     music.master = context.createGain();
     music.master.gain.value = 0;
     music.master.connect(compressor);
+    sceneAudio.input = context.createGain();
+    sceneAudio.input.gain.value = 0.68;
+    sceneAudio.input.connect(compressor);
     compressor.connect(context.destination);
+    music.context = context;
   }
 
   function createMusicBus(name) {
@@ -3160,6 +4351,218 @@
     for (const source of sources) {
       source.start(start);
       source.stop(end);
+    }
+  }
+
+  function noiseCue(from, to, duration, level, options = {}) {
+    return { from, to, duration, level, filter: 'lowpass', ...options };
+  }
+
+  function toneCue(from, to, duration, level, options = {}) {
+    return { from, to, duration, level, waveform: 'sine', ...options };
+  }
+
+  const sceneSounds = {
+    shot: { impact: [
+      noiseCue(7500, 2500, 0.095, 0.75, { filter: 'highpass' }),
+      noiseCue(3900, 510, 0.22, 0.88),
+      toneCue(142, 42, 0.17, 0.31),
+      noiseCue(1350, 310, 0.26, 0.25, { delay: 0.087 }),
+      noiseCue(740, 245, 0.22, 0.12, { delay: 0.19 })
+    ] },
+    birdImpact: { impact: [
+      toneCue(108, 42, 0.19, 0.53, { attack: 0.012 }),
+      noiseCue(680, 145, 0.24, 0.64, { attack: 0.012 }),
+      noiseCue(1450, 440, 0.15, 0.62, { filter: 'bandpass', resonance: 2.4, attack: 0.022, delay: 0.012 }),
+      noiseCue(440, 710, 0.12, 0.34, { filter: 'bandpass', resonance: 2, attack: 0.017, delay: 0.056 })
+    ] },
+    flameJet: { impact: [
+      noiseCue(440, 800, 0.39, 0.32, { attack: 0.062, sustain: 0.19 }),
+      noiseCue(1700, 1100, 0.36, 0.29, { filter: 'bandpass', attack: 0.075, sustain: 0.18 })
+    ] },
+    wolfHowl: { warning: [
+      toneCue(221, 258, 1.46, 0.48, { attack: 0.22, sustain: 1.02, peakFrequency: 402 }),
+      toneCue(442, 516, 1.46, 0.19, { attack: 0.26, sustain: 0.87, peakFrequency: 804 }),
+      toneCue(663, 774, 1.46, 0.10, { attack: 0.30, sustain: 0.78, peakFrequency: 1206 }),
+      noiseCue(1250, 580, 1.34, 0.20, { filter: 'bandpass', attack: 0.21, sustain: 0.73 })
+    ] },
+    bearGrowl: {
+      impact: [
+        toneCue(92, 44, 0.39, 0.32, { attack: 0.04, waveform: 'sawtooth' }),
+        noiseCue(820, 145, 0.39, 0.66, { filter: 'bandpass', attack: 0.05 }),
+        noiseCue(1220, 370, 0.17, 0.29, { delay: 0.083 })
+      ]
+    },
+    canineSnarl: {
+      impact: [
+        noiseCue(1360, 330, 0.39, 0.68, { filter: 'bandpass', attack: 0.031 }),
+        toneCue(204, 106, 0.22, 0.30, { attack: 0.016, waveform: 'sawtooth' }),
+        noiseCue(920, 240, 0.22, 0.40, { delay: 0.13, attack: 0.022 })
+      ]
+    },
+    animalHiss: {
+      impact: [
+        noiseCue(2420, 720, 0.35, 0.63, { filter: 'bandpass', attack: 0.041 }),
+        toneCue(337, 167, 0.29, 0.18, { attack: 0.035, waveform: 'sawtooth' }),
+        noiseCue(1120, 320, 0.16, 0.38, { delay: 0.10 })
+      ]
+    },
+    lightning: {
+      warning: [noiseCue(180, 460, 0.74, 0.17, { attack: 0.35 })],
+      impact: [
+        noiseCue(4700, 1700, 0.24, 0.86, { filter: 'highpass' }),
+        noiseCue(1200, 110, 1.65, 0.84, { attack: 0.038 }),
+        toneCue(61, 32, 0.66, 0.35, { delay: 0.048, attack: 0.062 }),
+        noiseCue(550, 125, 1.2, 0.49, { delay: 0.23, attack: 0.09 }),
+        noiseCue(2600, 1300, 1.5, 0.17, { delay: 0.43, attack: 0.17, filter: 'bandpass' }),
+        noiseCue(2400, 1050, 0.18, 0.18, { delay: 0.76, filter: 'bandpass' }),
+        noiseCue(3300, 1500, 0.16, 0.15, { delay: 1.14, filter: 'bandpass' })
+      ]
+    },
+    meteor: {
+      warning: [
+        noiseCue(950, 3200, 1.1, 0.44, { attack: 0.89, filter: 'bandpass' }),
+        toneCue(440, 95, 1.08, 0.12, { attack: 0.82, waveform: 'triangle' })
+      ],
+      impact: [
+        noiseCue(3700, 170, 0.85, 0.91),
+        toneCue(94, 29, 0.91, 0.64, { attack: 0.025 }),
+        noiseCue(690, 120, 0.89, 0.42, { delay: 0.12, attack: 0.075 }),
+        noiseCue(460, 105, 0.36, 0.33, { delay: 0.35 })
+      ]
+    },
+    ice: {
+      warning: [
+        noiseCue(4100, 1950, 1.05, 0.28, { attack: 0.74, filter: 'bandpass' }),
+        toneCue(1600, 480, 1.02, 0.085, { attack: 0.68 })
+      ],
+      impact: [
+        noiseCue(4200, 2600, 0.27, 0.66, { filter: 'highpass' }),
+        noiseCue(1190, 185, 0.36, 0.5),
+        toneCue(2012, 1810, 0.25, 0.17),
+        toneCue(2760, 2420, 0.21, 0.15, { delay: 0.035 }),
+        toneCue(3380, 3180, 0.17, 0.11, { delay: 0.093 }),
+        noiseCue(5700, 2300, 0.34, 0.22, { delay: 0.16, filter: 'bandpass' })
+      ]
+    },
+    tornado: {
+      warning: [
+        noiseCue(220, 660, 1.3, 0.46, { attack: 0.81, filter: 'bandpass' }),
+        noiseCue(1540, 600, 0.87, 0.29, { delay: 0.39, attack: 0.43, filter: 'bandpass' })
+      ],
+      impact: [
+        noiseCue(760, 220, 1.85, 0.63, { attack: 0.05, filter: 'bandpass' }),
+        noiseCue(220, 590, 1.49, 0.31, { delay: 0.13, attack: 0.42, filter: 'bandpass' }),
+        noiseCue(2600, 380, 0.15, 0.75, { delay: 0.14 }),
+        noiseCue(3500, 520, 0.19, 0.53, { delay: 0.39 }),
+        noiseCue(1850, 240, 0.28, 0.52, { delay: 0.64 }),
+        noiseCue(1400, 190, 0.23, 0.31, { delay: 0.91 })
+      ]
+    },
+    volcano: {
+      warning: [
+        toneCue(38, 59, 1.15, 0.32, { attack: 0.81, waveform: 'triangle' }),
+        noiseCue(100, 550, 1.15, 0.43, { attack: 0.82 })
+      ],
+      impact: [
+        noiseCue(225, 120, 2.5, 0.76, { attack: 0.16 }),
+        noiseCue(1700, 550, 2.15, 0.34, { attack: 0.28, filter: 'bandpass' }),
+        toneCue(53, 33, 0.64, 0.42, { waveform: 'triangle' }),
+        noiseCue(1100, 340, 0.43, 0.52, { delay: 0.41 }),
+        noiseCue(1750, 230, 0.68, 0.51, { delay: 0.94 }),
+        noiseCue(1150, 270, 0.44, 0.36, { delay: 1.46 })
+      ]
+    },
+    sinkhole: {
+      warning: [
+        noiseCue(450, 180, 0.82, 0.38, { attack: 0.3 }),
+        noiseCue(1850, 630, 0.35, 0.27, { delay: 0.38, filter: 'bandpass' })
+      ],
+      impact: [
+        noiseCue(900, 185, 1.65, 0.71, { attack: 0.15, filter: 'bandpass' }),
+        toneCue(99, 31, 0.88, 0.42, { attack: 0.24, waveform: 'triangle' }),
+        noiseCue(1250, 140, 0.32, 0.55, { delay: 0.36 }),
+        noiseCue(510, 95, 0.52, 0.37, { delay: 0.66 })
+      ]
+    },
+    earthquake: {
+      warning: [
+        toneCue(46, 49, 0.95, 0.29, { attack: 0.26, waveform: 'triangle' }),
+        noiseCue(280, 580, 0.94, 0.44, { attack: 0.53 }),
+        noiseCue(1500, 330, 0.15, 0.29, { delay: 0.35 }),
+        noiseCue(2200, 400, 0.18, 0.37, { delay: 0.64 })
+      ],
+      impact: [
+        toneCue(64, 37, 1.4, 0.37, { attack: 0.08, waveform: 'triangle' }),
+        noiseCue(330, 78, 1.75, 0.65, { attack: 0.11 }),
+        noiseCue(3100, 380, 0.24, 0.64),
+        noiseCue(2200, 240, 0.19, 0.52, { delay: 0.23 }),
+        noiseCue(2840, 520, 0.24, 0.55, { delay: 0.39 }),
+        noiseCue(1420, 170, 0.36, 0.59, { delay: 0.62 }),
+        noiseCue(1720, 280, 0.31, 0.32, { delay: 0.97 })
+      ]
+    }
+  };
+
+  function scheduleSceneCue(cue, time, pan) {
+    const { from, to, duration, level, attack = 0.005, sustain, delay = 0, filter, resonance = 0.68, waveform, peakFrequency } = cue;
+    const c = music.context;
+    const start = time + delay;
+    const end = start + duration;
+    const gain = c.createGain();
+    const nodes = [gain];
+    let source;
+    if (filter) {
+      source = c.createBufferSource();
+      source.buffer = music.noise;
+      source.loop = true;
+      source.loopStart = Math.random() * 0.18;
+      const band = c.createBiquadFilter();
+      band.type = filter;
+      band.Q.value = resonance;
+      band.frequency.setValueAtTime(from, start);
+      band.frequency.exponentialRampToValueAtTime(to, end);
+      source.connect(band);
+      band.connect(gain);
+      nodes.push(band);
+    } else {
+      source = c.createOscillator();
+      source.type = waveform;
+      source.frequency.setValueAtTime(from, start);
+      if (peakFrequency) {
+        source.frequency.exponentialRampToValueAtTime(peakFrequency, start + duration * 0.34);
+        source.frequency.exponentialRampToValueAtTime(peakFrequency * 0.96, start + duration * 0.66);
+      }
+      source.frequency.exponentialRampToValueAtTime(to, end);
+      source.connect(gain);
+    }
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(level, start + attack);
+    if (sustain) gain.gain.setValueAtTime(level, start + sustain);
+    gain.gain.exponentialRampToValueAtTime(0.00015, end - 0.008);
+    gain.gain.linearRampToValueAtTime(0, end);
+    connectVoice(sceneAudio, [source], nodes, gain, pan, start, end);
+  }
+
+  async function playSceneSound(kind, stage, x) {
+    if (paused || document.hidden) return;
+    const scene = world;
+    try {
+      if (!music.context) initAudio();
+      const c = music.context;
+      if (c.state !== 'running') await c.resume();
+      if (world !== scene || paused || document.hidden) return;
+      const time = c.currentTime + 0.008;
+      const pan = (x / W * 2 - 1) * 0.55;
+      for (const cue of sceneSounds[kind][stage]) scheduleSceneCue(cue, time, pan);
+    } catch (error) {
+      console.warn('Не удалось воспроизвести звуковой эффект', error);
+    }
+  }
+
+  function stopSceneSounds() {
+    for (const voice of sceneAudio.voices) {
+      for (const source of voice.sources) source.stop();
     }
   }
 
@@ -3317,13 +4720,14 @@
     musicButton.title = label;
   }
 
-  function syncMusicPlayback() {
+  function syncAudioPlayback() {
     music.operation = music.operation.then(async () => {
-      if (!music.context) return;
+      const context = music.context;
+      if (!context) return;
+      if (!paused && !document.hidden) await context.resume();
       if (music.enabled && !paused && !document.hidden) {
-        await music.context.resume();
         changeMusicSeason();
-        const now = music.context.currentTime;
+        const now = context.currentTime;
         holdMusicGain(music.master.gain, now);
         music.master.gain.linearRampToValueAtTime(music.volume, now + 0.12);
         if (!music.timer) music.timer = setInterval(scheduleMusic, 25);
@@ -3331,18 +4735,20 @@
       } else {
         clearInterval(music.timer);
         music.timer = null;
-        const now = music.context.currentTime;
+        const now = context.currentTime;
         holdMusicGain(music.master.gain, now);
         music.master.gain.linearRampToValueAtTime(0, now + 0.06);
-        await new Promise(resolve => setTimeout(resolve, 75));
-        await music.context.suspend();
+        if (paused || document.hidden) {
+          await new Promise(resolve => setTimeout(resolve, 75));
+          if (paused || document.hidden) await context.suspend();
+        }
       }
     }).catch(error => {
       console.error('Не удалось включить музыку', error);
       music.enabled = false;
       clearInterval(music.timer);
       music.timer = null;
-      if (music.context) music.context.suspend().catch(() => {});
+      if (music.master) music.master.gain.setTargetAtTime(0, music.context.currentTime, 0.02);
       updateMusicButton();
       byId('music-status').hidden = false;
       byId('music-status').textContent = 'Не удалось включить звук. Нажмите «Музыка» ещё раз.';
@@ -3356,7 +4762,7 @@
       if (!music.context) initAudio();
       music.enabled = !music.enabled;
       updateMusicButton();
-      syncMusicPlayback();
+      syncAudioPlayback();
     } catch {
       byId('music-status').hidden = false;
       byId('music-status').textContent = 'Этот браузер не поддерживает синтез музыки.';
@@ -3377,6 +4783,7 @@
   let weather;
   let frame = 0;
   let lastRender = 0;
+  let aimPointer;
 
   const currentWeather = () => weatherAt(world, simulatedMinutes / 60, weatherPicker.value, coverPicker.value);
 
@@ -3387,6 +4794,7 @@
 
   function render() {
     if (!world) return;
+    updateCataclysms(world, motion);
     const hour = simulatedMinutes / 60;
     const light = lightingAt(hour);
     const clouds = cloudState(world, motion, weather.level);
@@ -3394,6 +4802,10 @@
     const moon = moonlightAt(world, hour, weather, clouds);
     drawSky(world, light, motion, weather, clouds, sun, moon);
     drawLand(world, layers, light, hour, motion, weather, clouds, sun, moon);
+    if (aimPointer && !paused) updateSceneCursor();
+    drawCataclysms(ctx, world, motion);
+    if (world.jet) drawRangerJet(ctx, world.jet, motion);
+    if (world.shots.length) drawShots(ctx, world, motion);
     const minutes = Math.floor(simulatedMinutes);
     if (clock.valueAsNumber !== minutes) clock.value = minutes;
     const display = [Math.floor(minutes / 60), minutes % 60].map(value => String(value).padStart(2, '0')).join(':');
@@ -3443,9 +4855,29 @@
   }
 
   function selectVillage(code) {
+    stopSceneSounds();
+    rangerKeys.clear();
     world = generateWorld(code);
     world.population = createGroundPopulation(world);
+    world.groundActors = [];
+    world.ranger = null;
+    world.residentPoses = new Map();
+    world.fires = new Map();
+    world.groundFires = new Map();
+    world.flameFlyers = [];
+    world.lastFireMotion = 0;
+    world.nextJetSound = 0;
+    world.rabidAnimals = new Map();
+    world.deadResidents = new Map();
+    world.biteSplashes = [];
+    world.lastChaseMotion = 0;
     world.flocks = createFlocks(code);
+    world.visibleBirds = [];
+    world.birdHits = new Map();
+    world.fallenBirds = [];
+    world.shots = [];
+    world.cataclysmDeck = [];
+    world.cataclysmRandom = randomFrom(hash(code + '/катаклизмы'));
     world.cloudLayers = generateCloudLayers(code);
     world.festivalTree = createFestivalTree(world);
     const fragment = '#' + encodeURIComponent(code);
@@ -3455,6 +4887,7 @@
     }
     seedField.value = code;
     motion = 0;
+    updatePauseTitle();
     rebuildSeason();
     showWeatherNow();
     resetClock();
@@ -3465,12 +4898,18 @@
     seasonalColors = Object.fromEntries(Object.entries(colors).map(([phase, base]) =>
       [phase, seasonalPalette(base, phase)]));
     world.seasonEffects = createSeasonEffects(world);
-    world.moonMasks = paintMoonlight(world);
     layers = Object.fromEntries(Object.entries(seasonalColors).map(([phase, palette]) =>
       [phase, paintLand(world, palette)]));
-    world.foregroundMasks = buildForegroundMasks(world, layers.night.sprites);
-    shadowPosition = -1;
+    rebuildSceneMasks();
+    updateSceneCursor();
     weatherPicker.querySelector('option[value="rain"]').textContent = season === 'winter' ? 'Снег' : 'Дождь';
+  }
+
+  function rebuildSceneMasks() {
+    world.moonMasks = paintMoonlight(world);
+    world.foregroundMasks = buildForegroundMasks(world, layers.night.sprites);
+    world.propPixels = readPropPixels(layers.night.sprites);
+    shadowPosition = -1;
   }
 
   for (const button of document.querySelectorAll('[data-season]')) {
@@ -3489,14 +4928,22 @@
 
   function togglePause() {
     paused = !paused;
+    rangerKeys.clear();
     const label = paused ? 'Продолжить' : 'Пауза';
     pauseButton.setAttribute('aria-pressed', paused);
     pauseButton.setAttribute('aria-label', label);
-    pauseButton.title = label + ' (пробел)';
+    updatePauseTitle();
     pauseButton.querySelector('.action-label').textContent = label;
     pauseButton.querySelector('.compact-icon').textContent = paused ? '▶' : 'Ⅱ';
+    updateSceneCursor();
+    if (world.ranger) render();
     resetClock();
-    syncMusicPlayback();
+    syncAudioPlayback();
+  }
+
+  function updatePauseTitle() {
+    const label = paused ? 'Продолжить' : 'Пауза';
+    pauseButton.title = world?.ranger && !paused ? label : label + ' (пробел)';
   }
 
   function openSettings(open) {
@@ -3544,10 +4991,113 @@
   settingsToggle.addEventListener('click', () => openSettings(settings.hidden));
   byId('hide-ui').addEventListener('click', toggleInterface);
   interfaceToggle.addEventListener('click', toggleInterface);
-  canvas.addEventListener('click', event => {
+
+  function scenePoint({ clientX, clientY }) {
     const bounds = canvas.getBoundingClientRect();
-    const x = (event.clientX - bounds.left) / bounds.width;
-    const y = (event.clientY - bounds.top) / bounds.height;
+    return { x: (clientX - bounds.left) * W / bounds.width, y: (clientY - bounds.top) * H / bounds.height };
+  }
+
+  function sceneTargets(point) {
+    const prop = sceneItemAt(world, point);
+    const resident = residentAt(world, point, prop);
+    const animal = animalAt(world, point, prop);
+    if (resident && (!animal || resident.y >= animal.y)) return { resident };
+    if (animal) return { animal };
+    return prop?.kind === 'house' ? { house: prop } : {};
+  }
+
+  function updateSceneCursor() {
+    const point = world && aimPointer && !paused ? scenePoint(aimPointer) : null;
+    const { resident, animal, house } = point ? sceneTargets(point) : {};
+    canvas.classList.toggle('sheriff', Boolean(resident && (!rangerKeys.size || resident.ranger)));
+    canvas.classList.toggle('rabies', Boolean(animal && !world.rabidAnimals.has(animal.animal)));
+    canvas.classList.toggle('danger', Boolean(house && !house.cataclysm && !houseHasDamage(house)));
+    canvas.classList.toggle('aiming', Boolean(point && !resident && !animal && !house && canAimAt(world, point)));
+  }
+
+  const cursor = makeCanvas(25, 25);
+  const cursorContext = cursor.getContext('2d');
+  for (const [x, y, width, height] of [[12, 3, 1, 6], [12, 16, 1, 6], [3, 12, 6, 1], [16, 12, 6, 1]]) {
+    pixels(cursorContext, '#202226', x - 1, y - 1, width + 2, height + 2);
+    pixels(cursorContext, '#9df458', x, y, width, height);
+  }
+  canvas.style.setProperty('--aim-cursor', 'url("' + cursor.toDataURL() + '") 12 12');
+
+  const dangerCursor = makeCanvas(25, 25);
+  const dangerContext = dangerCursor.getContext('2d');
+  polygon(dangerContext, '#292429', [[12, 1], [24, 23], [0, 23]]);
+  polygon(dangerContext, '#ffd16a', [[12, 4], [21, 21], [3, 21]]);
+  pixels(dangerContext, '#352629', 11, 10, 3, 6);
+  pixels(dangerContext, '#352629', 11, 17, 3, 2);
+  canvas.style.setProperty('--danger-cursor', 'url("' + dangerCursor.toDataURL() + '") 12 12');
+
+  const eyesCursor = makeCanvas(32, 24);
+  const eyesContext = eyesCursor.getContext('2d');
+  for (const side of [-1, 1]) {
+    eyesContext.save();
+    eyesContext.translate(16, 12);
+    eyesContext.scale(side, 1);
+    polygon(eyesContext, '#252026', [[1, -1], [15, -8], [15, 3], [9, 7], [4, 5]]);
+    polygon(eyesContext, '#d74d42', [[3, 0], [13, -5], [13, 2], [9, 5], [5, 3]]);
+    pixels(eyesContext, '#3c2226', 7, -2, 2, 6);
+    pixels(eyesContext, '#ffd5a5', 9, -2, 2, 1);
+    eyesContext.restore();
+  }
+  canvas.style.setProperty('--rabies-cursor', 'url("' + eyesCursor.toDataURL() + '") 16 12');
+
+  const sheriffCursor = makeCanvas(28, 28);
+  const sheriffContext = sheriffCursor.getContext('2d');
+  const star = radius => Array.from({ length: 10 }, (_, i) => {
+    const angle = i * Math.PI / 5 - Math.PI / 2;
+    const reach = radius * (i % 2 ? 0.46 : 1);
+    return [14 + Math.cos(angle) * reach, 14 + Math.sin(angle) * reach];
+  });
+  polygon(sheriffContext, '#342625', star(13.5));
+  polygon(sheriffContext, '#eab75e', star(10.6));
+  ellipse(sheriffContext, '#ffe1a2', 14, 14, 3.5, 3.5);
+  pixels(sheriffContext, '#956734', 13, 14, 3);
+  canvas.style.setProperty('--sheriff-cursor', 'url("' + sheriffCursor.toDataURL() + '") 14 14');
+
+  canvas.addEventListener('pointermove', event => {
+    aimPointer = event.pointerType === 'mouse' ? { clientX: event.clientX, clientY: event.clientY } : null;
+    if (aimPointer && !paused && !world.ranger) {
+      const { resident } = sceneTargets(scenePoint(aimPointer));
+      if (resident) {
+        setRanger(world, resident);
+        canvas.focus({ preventScroll: true });
+        render();
+      }
+    }
+    updateSceneCursor();
+  });
+  canvas.addEventListener('pointerleave', event => {
+    if (event.pointerType !== 'mouse') return;
+    aimPointer = null;
+    updateSceneCursor();
+  });
+  window.addEventListener('resize', updateSceneCursor);
+  canvas.addEventListener('click', event => {
+    const point = scenePoint(event);
+    if (event.pointerType === 'mouse' && !paused) {
+      if (rangerKeys.has('Space')) return;
+      const { resident, animal, house } = sceneTargets(point);
+      if (resident) {
+        setRanger(world, resident);
+        render();
+        return;
+      }
+      if ((house && (house.cataclysm || houseHasDamage(house))) || (animal && world.rabidAnimals.has(animal.animal))) return;
+      if (animal || house || canAimAt(world, point)) {
+        if (!ui.hidden) openSettings(false);
+        if (animal) startRabidChase(world, animal, motion);
+        else if (house) startCataclysm(world, house, motion);
+        else fireAt(world, point, motion);
+        render();
+        return;
+      }
+    }
+    const x = point.x / W;
+    const y = point.y / H;
     const centralTap = x >= 0.18 && x <= 0.82 && y >= 0.18 && y <= 0.82;
     if ((touchInterface.matches && centralTap) || (!touchInterface.matches && ui.hidden)) {
       toggleInterface();
@@ -3572,12 +5122,18 @@
     fullscreenButton.querySelector('.action-label').textContent = label;
   });
   document.addEventListener('visibilitychange', () => {
+    if (document.hidden) rangerKeys.clear();
     resetClock();
-    syncMusicPlayback();
+    syncAudioPlayback();
+  });
+  window.addEventListener('blur', () => rangerKeys.clear());
+  document.addEventListener('keyup', event => {
+    if (rangerKeys.delete(event.code) && event.code === 'Space') render();
   });
   document.addEventListener('keydown', event => {
-    if (event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
+    if (event.ctrlKey || event.altKey || event.metaKey) return;
     if (event.key === 'Escape') {
+      if (event.repeat) return;
       if (ui.hidden) toggleInterface();
       else if (!settings.hidden) {
         openSettings(false);
@@ -3586,6 +5142,16 @@
       return;
     }
     if (event.target.closest('input, select')) return;
+    if (world.ranger && !paused && (rangerDirections[event.code] ||
+      (event.code === 'Space' && !event.target.closest('button')))) {
+      event.preventDefault();
+      if (!rangerKeys.has(event.code)) {
+        rangerKeys.add(event.code);
+        if (event.code === 'Space') render();
+      }
+      return;
+    }
+    if (event.repeat) return;
     if (event.code === 'Space' && !event.target.closest('button')) {
       event.preventDefault();
       togglePause();
