@@ -47,10 +47,7 @@
     height: min(100dvh, 56.25vw);
     image-rendering: crisp-edges;
     image-rendering: pixelated;
-    visibility: hidden;
   }
-  .render-status { position: absolute; inset: 0; display: grid; place-content: center; padding: 24px; text-align: center; color: var(--muted); pointer-events: none; }
-  .render-status[hidden] { display: none; }
   canvas:focus { outline: none; }
   canvas { touch-action: manipulation; }
   canvas.hi-dpi { image-rendering: auto; }
@@ -183,7 +180,6 @@
 <body>
 <main id="village">
   <canvas id="landscape" width="480" height="270" tabindex="-1" role="img" aria-label="Пиксельная лесная деревня с жителями, питомцами, лесными зверями, птицами, погодой и сменой суток"></canvas>
-  <div id="render-status" class="render-status" role="status">Создаём деревню…</div>
   <button id="ui-toggle" class="ui-toggle" type="button" aria-label="Скрыть интерфейс" aria-pressed="false" aria-controls="interface" title="Скрыть интерфейс (H)"><span class="view-icon" aria-hidden="true"></span></button>
   <div class="ui" id="interface">
     <header class="scene-heading">
@@ -261,17 +257,9 @@
   const DAY_SECONDS = 360;
   const DAY_MINUTES = 1440;
   const START_HOUR = 7.8;
-  const FRAME_INTERVAL = 1000 / 30;
   const byId = id => document.getElementById(id);
   const canvas = byId('landscape');
-  // Android GPU drivers can lose hundreds of separate accelerated Canvas surfaces at startup.
-  const androidCanvas = /Android/i.test(navigator.userAgent);
-  const drawingOptions = {alpha: true, desynchronized: false, willReadFrequently: androidCanvas};
-  const ctx = canvas.getContext('2d', drawingOptions);
-  const renderStatus = byId('render-status');
-  let renderBlocked = false;
-  let recoveryTimer = null;
-  let recoveryAttempts = 0;
+  const ctx = canvas.getContext('2d', { alpha: false });
   let renderMode = 'hd';
   try { renderMode = localStorage.getItem('village-render') === 'pixel' ? 'pixel' : 'hd'; } catch {}
   let renderScale = 1;
@@ -280,14 +268,7 @@
     surface.height = Math.ceil(height * scale);
     surface.logicalWidth = width;
     surface.logicalHeight = height;
-    const g = surface.getContext('2d', drawingOptions);
-    if (!g) throw new Error('Canvas context unavailable');
-    if (!surface.renderWatched) {
-      surface.renderWatched = true;
-      surface.addEventListener('contextlost', () => {
-        if (isLiveSurface(surface)) recoverRenderer(new Error('Canvas context lost'));
-      });
-    }
+    const g = surface.getContext('2d');
     g.setTransform(scale, 0, 0, scale, 0, 0);
     g.imageSmoothingEnabled = renderMode === 'hd';
     return surface;
@@ -299,26 +280,16 @@
   function blit(g, source, x, y) {
     g.drawImage(source, x, y, source.logicalWidth || source.width, source.logicalHeight || source.height);
   }
-  function blitSprite(g, sprite) {
-    const scale = sprite.canvas.width / sprite.canvas.logicalWidth;
-    g.drawImage(sprite.canvas, sprite.sourceX * scale, sprite.sourceY * scale,
-      sprite.width * scale, sprite.height * scale, sprite.left, sprite.top, sprite.width, sprite.height);
-  }
-
-  function releaseSurface(surface) {
-    surface.width = 1;
-    surface.height = 1;
-  }
   const landCanvas = makeCanvas();
   const landContext = landCanvas.getContext('2d');
   const shadowCanvas = makeCanvas();
   const shadowContext = shadowCanvas.getContext('2d');
   const cloudCanvas = makeCanvas(W, SKY_HEIGHT);
   const cloudContext = cloudCanvas.getContext('2d');
-  const actorSpritePool = [];
-  let actorSprites = new WeakMap();
-  let actorSpriteCandidates = new WeakSet();
-  let actorSpriteCount = 0;
+  const festivalCanvas = makeCanvas();
+  const festivalContext = festivalCanvas.getContext('2d');
+  const windowLightCanvas = makeCanvas();
+  const windowLightContext = windowLightCanvas.getContext('2d');
   const ui = byId('interface');
   const interfaceToggle = byId('ui-toggle');
   const touchInterface = window.matchMedia('(pointer: coarse), (max-width: 680px)');
@@ -1664,8 +1635,7 @@
 
   function drawFestivalLights(world, actors, motion, darkness) {
     const tree = world.festivalTree;
-    const region = world.foregroundMasks.get(tree);
-    const g = region.lightContext;
+    const g = festivalContext;
     if (!tree.glows) {
       tree.glows = festiveColors.map(color => {
         const glow = makeCanvas(13, 13);
@@ -1680,7 +1650,7 @@
         return glow;
       });
     }
-    g.clearRect(region.left, region.top, region.width, region.height);
+    g.clearRect(0, 0, W, H);
     for (let pool = 0; pool < 3; pool++) {
       const bulb = tree.lights[tree.lights.length - 1 - pool * 3];
       const strength = garlandBrightness(bulb, motion);
@@ -1714,87 +1684,30 @@
     g.globalAlpha = 0.6 * darkness;
     blit(g, tree.glows[3], tree.x + tree.bend - 6, tree.y - tree.height - 8);
     g.globalAlpha = 1;
-    maskForeground(g, world, actors, tree, motion);
-    blit(landContext, region.lightCanvas, region.left, region.top);
-  }
-
-  function intersects(a, b) {
-    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-  }
-
-  function houseLightStrength(house, hour) {
-    return Math.max(smooth((hour - house.litAt) / 0.75), 1 - smooth((hour - house.goesDark) / 0.6));
-  }
-
-  function beginActorFrame(world, actors, hour) {
-    actorSprites = new WeakMap();
-    actorSpriteCandidates = new WeakSet();
-    actorSpriteCount = 0;
-    const sources = world.houses.filter(house => house.style !== 'shed' && houseLightStrength(house, hour) > 0);
-    if (season === 'winter') sources.push(world.festivalTree);
-    if (!sources.length) return;
-    for (const actor of actors) {
-      if (actor.alpha < 0.01) continue;
-      const bounds = actorBounds(actor);
-      if (sources.some(source => actor.y > source.y && intersects(bounds, world.foregroundMasks.get(source)))) {
-        actorSpriteCandidates.add(actor);
-      }
-    }
-  }
-
-  function lightBounds(item) {
-    let left = W, top = H, right = 0, bottom = 0;
-    const include = (x, y, rx, ry) => {
-      left = Math.min(left, x - rx); right = Math.max(right, x + rx);
-      top = Math.min(top, y - ry); bottom = Math.max(bottom, y + ry);
-    };
-    if (item.kind === 'festivalTree') {
-      include(item.x, item.y + 3, 41, 11);
-      include(item.x + item.bend, item.y - item.height - 2, 8, 8);
-      for (const bulb of item.lights) include(bulb.x, bulb.y, 8, 8);
-    } else {
-      const d = dimensions(item);
-      include(item.x + item.face * (d.left + 6) - 1, item.y + 4, 19, 7);
-      for (const {x, y, w, h} of houseWindows(item, d)) {
-        include(item.x + item.face * (x + w / 2), item.y + y + h / 2,
-          Math.max(w + 3, w * 1.5) + 2, Math.max(h + 3, h * 1.5) + 2);
-      }
-    }
-    left = clamp(Math.floor(left), 0, W - 1); top = clamp(Math.floor(top), 0, H - 1);
-    right = clamp(Math.ceil(right), left + 1, W); bottom = clamp(Math.ceil(bottom), top + 1, H);
-    return {left, top, right, bottom, width: right - left, height: bottom - top};
+    maskForeground(g, world, actors, tree.y, motion);
+    blit(landContext, festivalCanvas, 0, 0);
   }
 
   function buildForegroundMasks(world, sprites) {
-    const sources = world.houses.filter(house => house.style !== 'shed');
-    if (season === 'winter') sources.push(world.festivalTree);
-    return new Map(sources.map(source => {
-      const bounds = lightBounds(source);
-      const mask = makeCanvas(bounds.width, bounds.height);
+    const depths = new Set(world.houses.map(house => house.y));
+    if (season === 'winter') depths.add(world.festivalTree.y);
+    return new Map([...depths].map(depth => {
+      const mask = makeCanvas();
       const g = mask.getContext('2d');
-      g.translate(-bounds.left, -bounds.top);
       for (const sprite of sprites) {
-        const spriteBounds = {left: sprite.left, top: sprite.top,
-          right: sprite.left + sprite.width, bottom: sprite.top + sprite.height};
-        if (sprite.y > source.y && intersects(bounds, spriteBounds)) blitSprite(g, sprite);
+        if (sprite.y > depth) blit(g, sprite.canvas, sprite.left, sprite.top);
       }
-      const lightCanvas = makeCanvas(bounds.width, bounds.height);
-      const lightContext = lightCanvas.getContext('2d');
-      lightContext.translate(-bounds.left, -bounds.top);
-      return [source, {...bounds, canvas: mask, lightCanvas, lightContext}];
+      return [depth, mask];
     }));
   }
 
-  function maskForeground(g, world, actors, source, motion) {
-    const region = world.foregroundMasks.get(source);
-    g.save();
-    g.globalAlpha = 1;
+  function maskForeground(g, world, actors, depth, motion) {
     g.globalCompositeOperation = 'destination-out';
-    blit(g, region.canvas, region.left, region.top);
+    blit(g, world.foregroundMasks.get(depth), 0, 0);
     for (const actor of actors) {
-      if (actor.y > source.y && intersects(region, actorBounds(actor))) drawGroundActor(g, actor, motion);
+      if (actor.y > depth) drawGroundActor(g, actor, motion);
     }
-    g.restore();
+    g.globalCompositeOperation = 'source-over';
   }
 
   function paintLand(world, palette) {
@@ -1822,38 +1735,12 @@
       }
       left = Math.floor(left);
       top = Math.floor(top);
-      return {item, left, top, width: Math.ceil(width), height: Math.ceil(bottom - top), y: item.y};
+      const canvas = makeCanvas(Math.ceil(width), Math.ceil(bottom - top));
+      const g = canvas.getContext('2d');
+      g.translate(-left, -top);
+      drawProp(g, item, palette);
+      return { canvas, left, top, y: item.y };
     });
-    // Pack the artwork into small shared atlases instead of allocating a context per object.
-    // Each atlas stays within 1024 x 1024 physical pixels in Hi DPI mode.
-    const pages = [];
-    let page;
-    for (const sprite of [...sprites].sort((a, b) => b.height - a.height || b.width - a.width)) {
-      if (!page) { page = {x: 0, y: 0, rowHeight: 0, width: 0, height: 0, sprites: []}; pages.push(page); }
-      if (page.x + sprite.width > 512) { page.x = 0; page.y += page.rowHeight; page.rowHeight = 0; }
-      if (page.y + sprite.height > 512) {
-        page = {x: 0, y: 0, rowHeight: 0, width: 0, height: 0, sprites: []}; pages.push(page);
-      }
-      sprite.sourceX = page.x; sprite.sourceY = page.y;
-      page.sprites.push(sprite);
-      page.x += sprite.width;
-      page.rowHeight = Math.max(page.rowHeight, sprite.height);
-      page.width = Math.max(page.width, page.x);
-      page.height = Math.max(page.height, page.y + sprite.height);
-    }
-    for (const page of pages) {
-      const atlas = makeCanvas(page.width, page.height);
-      const g = atlas.getContext('2d');
-      for (const sprite of page.sprites) {
-        g.save();
-        g.beginPath(); g.rect(sprite.sourceX, sprite.sourceY, sprite.width, sprite.height); g.clip();
-        g.translate(sprite.sourceX - sprite.left, sprite.sourceY - sprite.top);
-        drawProp(g, sprite.item, palette);
-        g.restore();
-        sprite.canvas = atlas;
-        delete sprite.item;
-      }
-    }
     return { terrain, sprites };
   }
 
@@ -1914,8 +1801,6 @@
         blit(out, highlight, 0, 0);
       }
     }
-    releaseSurface(silhouette);
-    releaseSurface(highlight);
     return masks;
   }
 
@@ -2267,7 +2152,6 @@
     drawLandLayer(layers, light, 'terrain');
     drawFlocks(landContext, world, hour, motion, weather, sun, moon);
     const actors = groundPopulation(world, motion, hour);
-    beginActorFrame(world, actors, hour);
     updateFootprints(world, actors, motion);
     drawFootprints(landContext, world, motion);
     drawCastShadows(world, sun);
@@ -2277,11 +2161,11 @@
       while (nextActor < actors.length && actors[nextActor].y <= sprite.y) {
         drawGroundActor(landContext, actors[nextActor++], motion);
       }
-      blitSprite(landContext, sprite);
+      blit(landContext, sprite.canvas, sprite.left, sprite.top);
       if (light.from !== light.to && light.blend > 0) {
         const other = layers[light.to].sprites[i];
         landContext.globalAlpha = light.blend;
-        blitSprite(landContext, other);
+        blit(landContext, other.canvas, other.left, other.top);
         landContext.globalAlpha = 1;
       }
     }
@@ -2327,11 +2211,9 @@
 
     for (const house of world.houses) {
       if (house.style === 'shed') continue;
-      const strength = houseLightStrength(house, hour);
+      const strength = Math.max(smooth((hour - house.litAt) / 0.75), 1 - smooth((hour - house.goesDark) / 0.6));
       if (strength <= 0) continue;
-      const region = world.foregroundMasks.get(house);
-      const {lightCanvas: windowLightCanvas, lightContext: windowLightContext} = region;
-      windowLightContext.clearRect(region.left, region.top, region.width, region.height);
+      windowLightContext.clearRect(0, 0, W, H);
       const d = dimensions(house);
       const groundX = house.x + house.face * (d.left + 6);
       for (let ring = 3; ring >= 1; ring--) {
@@ -2354,8 +2236,8 @@
       }
       windowLightContext.restore();
       windowLightContext.globalAlpha = 1;
-      maskForeground(windowLightContext, world, actors, house, motion);
-      blit(ctx, windowLightCanvas, region.left, region.top);
+      maskForeground(windowLightContext, world, actors, house.y, motion);
+      blit(ctx, windowLightCanvas, 0, 0);
     }
 
     if (weather.rain > 0.02) {
@@ -2840,44 +2722,7 @@
       sleeping: night > 0.7, alpha: 1 };
   }
 
-  function actorBounds(actor) {
-    const x = actor.x, y = actor.kind === 'leafParticle' ? actor.leafY : actor.y;
-    const scale = mix(0.58, 1.02, clamp((actor.y - 151) / 110));
-    const width = actor.kind === 'leafParticle' ? 4 : actor.kind === 'fire' ? 12 : 17 * scale + 3;
-    const height = actor.kind === 'leafParticle' ? 4 : actor.kind === 'fire' ? 26 : 28 * scale + 3;
-    const left = Math.floor(x - width), right = Math.ceil(x + width);
-    const top = Math.floor(y - height), bottom = Math.ceil(y + (actor.kind === 'leafParticle' ? 4 : 7));
-    return {left, top, right, bottom, width: right - left, height: bottom - top};
-  }
-
   function drawGroundActor(g, actor, motion) {
-    if (actor.alpha < 0.01) return;
-    if (!actorSpriteCandidates.has(actor)) return paintGroundActor(g, actor, motion);
-    let sprite = actorSprites.get(actor);
-    if (!sprite) {
-      const bounds = actorBounds(actor);
-      let slot = actorSpritePool[actorSpriteCount];
-      if (!slot) {
-        const surface = makeCanvas(Math.ceil(bounds.width / 8) * 8, Math.ceil(bounds.height / 8) * 8);
-        slot = actorSpritePool[actorSpriteCount] = {canvas: surface, context: surface.getContext('2d')};
-      } else if (slot.canvas.logicalWidth < bounds.width || slot.canvas.logicalHeight < bounds.height) {
-        prepareSurface(slot.canvas, Math.max(slot.canvas.logicalWidth, Math.ceil(bounds.width / 8) * 8),
-          Math.max(slot.canvas.logicalHeight, Math.ceil(bounds.height / 8) * 8));
-      }
-      actorSpriteCount++;
-      const paint = slot.context;
-      paint.clearRect(0, 0, slot.canvas.logicalWidth, slot.canvas.logicalHeight);
-      paint.save();
-      paint.translate(-bounds.left, -bounds.top);
-      paintGroundActor(paint, actor, motion);
-      paint.restore();
-      sprite = {...bounds, canvas: slot.canvas};
-      actorSprites.set(actor, sprite);
-    }
-    blit(g, sprite.canvas, sprite.left, sprite.top);
-  }
-
-  function paintGroundActor(g, actor, motion) {
     if (renderMode === 'hd') return drawGroundActorHD(g, actor, motion);
     if (actor.alpha < 0.01) return;
     if (actor.kind === 'leafParticle') {
@@ -3762,8 +3607,6 @@
       const data = sg.getImageData(0, 0, CLOUD_TILE, SKY_HEIGHT).data;
       const opacity = new Uint8Array(CLOUD_TILE * SKY_HEIGHT);
       for (let i = 0; i < opacity.length; i++) opacity[i] = data[i * 4 + 3];
-      releaseSurface(sample);
-      releaseSurface(layer.canvas);
       return {canvas: surface, opacity, speed: layer.speed};
     });
   }
@@ -3887,18 +3730,16 @@
   }
 
   function desiredRenderScale() {
-    return renderMode === 'hd' ? 2 : 1;
+    if (renderMode === 'pixel') return 1;
+    const display = Math.min(window.innerWidth / W, window.innerHeight / H);
+    return clamp(Math.ceil(display * (window.devicePixelRatio || 1)), 2, 4);
   }
 
   function configureRenderer() {
     renderScale = desiredRenderScale();
     prepareSurface(canvas, W, H);
-    for (const surface of [landCanvas, shadowCanvas]) prepareSurface(surface, W, H);
+    for (const surface of [landCanvas, shadowCanvas, festivalCanvas, windowLightCanvas]) prepareSurface(surface, W, H);
     prepareSurface(cloudCanvas, W, SKY_HEIGHT);
-    actorSpritePool.length = 0;
-    actorSprites = new WeakMap();
-    actorSpriteCandidates = new WeakSet();
-    actorSpriteCount = 0;
     canvas.classList.toggle('hi-dpi', renderMode === 'hd');
     canvas.setAttribute('aria-label', (renderMode === 'hd' ? 'Рисованная' : 'Пиксельная') + ' лесная деревня с жителями, питомцами, лесными зверями, птицами, погодой и сменой суток');
     for (const button of document.querySelectorAll('[data-render]')) button.setAttribute('aria-pressed', String(button.dataset.render === renderMode));
@@ -3906,7 +3747,6 @@
 
   function rebuildArtwork() {
     // Preserve the simulation, tracks, time, weather and population when changing only the artwork.
-    releaseArtwork(true);
     world.festivalTree.glows = null;
     world.cloudLayers = renderMode === 'hd' ? generateCloudLayersHD(world.code) : generateCloudLayersPixel(world.code);
     world.moonMasks = paintMoonlight(world);
@@ -4322,28 +4162,17 @@
       ]
     },
     winter: {
-      // A music-box arrangement of the traditional Jingle Bells chorus.
-      bpm: 104, root: 48, scale: [0, 2, 4, 5, 7, 9, 11],
-      chords: [0, 0, 0, 0, 3, 0, 4, 4, 0, 0, 0, 0, 3, 0, 4, 0],
-      padIntervals: [0, 2, 4],
-      lead: 'bell', brightness: 3400, arpLevel: 0.012, padLevel: 0.029, bassLevel: 0.057, leadLevel: 0.073,
+      bpm: 62, root: 54, scale: [0, 2, 3, 5, 7, 8, 11], chords: [0, 5, 3, 4, 0, 2, 5, 4],
+      lead: 'bell', brightness: 2900, arpLevel: 0.016, padLevel: 0.033, bassLevel: 0.057, leadLevel: 0.075,
       melody: [
-        '16 -1 -1 -1 16 -1 -1 -1 16 -1 -1 -1 -1 -1 -1 -1',
-        '16 -1 -1 -1 16 -1 -1 -1 16 -1 -1 -1 -1 -1 -1 -1',
-        '16 -1 -1 -1 18 -1 -1 -1 14 -1 -1 -1 15 -1 -1 -1',
-        '16 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1',
-        '17 -1 -1 -1 17 -1 -1 -1 17 -1 -1 -1 17 -1 -1 -1',
-        '17 -1 -1 -1 16 -1 -1 -1 16 -1 -1 -1 16 -1 16 -1',
-        '16 -1 -1 -1 15 -1 -1 -1 15 -1 -1 -1 16 -1 -1 -1',
-        '15 -1 -1 -1 -1 -1 -1 -1 18 -1 -1 -1 -1 -1 -1 -1',
-        '16 -1 -1 -1 16 -1 -1 -1 16 -1 -1 -1 -1 -1 -1 -1',
-        '16 -1 -1 -1 16 -1 -1 -1 16 -1 -1 -1 -1 -1 -1 -1',
-        '16 -1 -1 -1 18 -1 -1 -1 14 -1 -1 -1 15 -1 -1 -1',
-        '16 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1',
-        '17 -1 -1 -1 17 -1 -1 -1 17 -1 -1 -1 17 -1 -1 -1',
-        '17 -1 -1 -1 16 -1 -1 -1 16 -1 -1 -1 16 -1 16 -1',
-        '18 -1 -1 -1 18 -1 -1 -1 17 -1 -1 -1 15 -1 -1 -1',
-        '14 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1'
+        '14 -1 -1 -1 -1 -1 11 -1 -1 -1 8 -1 -1 -1 -1 -1',
+        '-1 -1 12 -1 -1 -1 -1 -1 10 -1 -1 -1 8 -1 -1 -1',
+        '10 -1 -1 -1 -1 -1 13 -1 -1 -1 -1 -1 11 -1 -1 -1',
+        '-1 -1 13 -1 -1 -1 11 -1 -1 -1 6 -1 -1 -1 -1 -1',
+        '14 -1 -1 -1 15 -1 -1 -1 -1 -1 11 -1 -1 -1 -1 -1',
+        '-1 -1 11 -1 -1 -1 -1 -1 9 -1 -1 -1 7 -1 -1 -1',
+        '12 -1 -1 -1 -1 -1 10 -1 -1 -1 8 -1 -1 -1 -1 -1',
+        '13 -1 -1 -1 11 -1 -1 -1 -1 -1 7 -1 -1 -1 -1 -1'
       ]
     }
   };
@@ -4399,13 +4228,13 @@
     const convolver = c.createConvolver();
     convolver.buffer = music.impulse;
     const reverb = c.createGain();
-    reverb.gain.value = name === 'winter' ? 0.21 : 0.17;
+    reverb.gain.value = name === 'winter' ? 0.29 : 0.17;
     const delay = c.createDelay(2);
     delay.delayTime.value = 60 / score.bpm * 0.75;
     const feedback = c.createGain();
-    feedback.gain.value = name === 'winter' ? 0.24 : 0.22;
+    feedback.gain.value = name === 'winter' ? 0.33 : 0.22;
     const echo = c.createGain();
-    echo.gain.value = name === 'winter' ? 0.14 : 0.12;
+    echo.gain.value = name === 'winter' ? 0.22 : 0.12;
     input.connect(filter);
     filter.connect(output);
     input.connect(convolver);
@@ -4552,10 +4381,10 @@
     const step = 60 / score.bpm / 4;
     const bar = Math.floor(row / 16);
     const beat = row % 16;
-    const chord = score.chords[bar % score.chords.length];
+    const chord = score.chords[bar % 8];
     const bright = bus.name === 'spring';
     if (beat === 0) {
-      for (const [i, interval] of (score.padIntervals || [0, 2, 4, 6]).entries()) {
+      for (const [i, interval] of [0, 2, 4, 6].entries()) {
         musicNote(bus, musicDegree(score, chord + interval), time + i * 0.013,
           step * 14.7, 'pad', score.padLevel, (i - 1.5) * 0.28);
       }
@@ -4566,18 +4395,15 @@
     }
     const arpSpacing = bright ? 1 : 2;
     if (beat % arpSpacing === 0) {
-      const order = bus.name === 'winter' ? [0, 2, 4, 7, 4, 2, 7, 4] : [0, 2, 4, 6, 4, 2, 6, 4];
+      const order = bus.name === 'winter' ? [0, 4, 2, 6, 4, 2, 6, 2] : [0, 2, 4, 6, 4, 2, 6, 4];
       const degree = chord + 7 + order[(beat / arpSpacing) % 8];
       musicNote(bus, musicDegree(score, degree), time, step * 0.73,
         bus.name === 'winter' ? 'bell' : 'pluck', score.arpLevel, beat % 4 ? 0.42 : -0.42);
     }
-    const pattern = score.melody[bar % score.melody.length];
-    let degree = pattern[beat];
+    let degree = score.melody[bar % 8][beat];
     if (degree >= 0) {
-      if (bus.name !== 'winter' && bar >= 8 && bar < 12 && beat < 8) degree += bright ? 2 : 1;
-      const nextNote = pattern.findIndex((note, index) => index > beat && note >= 0);
-      const winterLength = ((nextNote < 0 ? 16 : nextNote) - beat) * 0.85;
-      const duration = step * (bright ? 0.95 : bus.name === 'winter' ? winterLength : 2.65);
+      if (bar >= 8 && bar < 12 && beat < 8) degree += bright ? 2 : 1;
+      const duration = step * (bright ? 0.95 : bus.name === 'winter' ? 3.4 : 2.65);
       musicNote(bus, musicDegree(score, degree), time, duration, score.lead, score.leadLevel, -0.08);
     }
     if (bright) {
@@ -4591,9 +4417,8 @@
     } else if (bus.name === 'autumn') {
       if (beat === 0 && bar % 2 === 0) musicDrum(bus, 'kick', time, 0.075);
       if (beat === 12) musicDrum(bus, 'snare', time, 0.018);
-    } else if (bus.name === 'winter') {
-      if (beat === 0) musicDrum(bus, 'kick', time, 0.045);
-      if (beat % 2 === 0) musicDrum(bus, 'hat', time, beat % 4 ? 0.006 : 0.011);
+    } else if (beat === 0 && bar % 4 === 0) {
+      musicDrum(bus, 'kick', time, 0.055);
     }
     bus.row = (row + 1) % 256;
     bus.nextTime += step;
@@ -4683,7 +4508,6 @@
   let weather;
   let frame = 0;
   let lastRender = 0;
-  let nextRender = 0;
 
   const currentWeather = () => weatherAt(world, simulatedMinutes / 60, weatherPicker.value, coverPicker.value);
 
@@ -4693,17 +4517,6 @@
   }
 
   function render() {
-    if (renderBlocked || !world || !layers) return;
-    try {
-      renderScene();
-      canvas.style.visibility = 'visible';
-      renderStatus.hidden = true;
-    } catch (error) {
-      recoverRenderer(error);
-    }
-  }
-
-  function renderScene() {
     if (!world) return;
     const hour = simulatedMinutes / 60;
     const light = lightingAt(hour);
@@ -4722,12 +4535,9 @@
   function tick(now) {
     frame = 0;
     const elapsed = now - lastRender;
-    if (now + 0.5 >= nextRender) {
+    if (elapsed >= 40) {
       const dt = Math.min(elapsed / 1000, 0.15);
       lastRender = now;
-      // Keep a fixed schedule instead of rounding every frame up to the next refresh.
-      const intervals = Math.max(1, Math.floor((now - nextRender + 0.5) / FRAME_INTERVAL) + 1);
-      nextRender += intervals * FRAME_INTERVAL;
       simulatedMinutes = wrap(simulatedMinutes + dt * DAY_MINUTES / DAY_SECONDS, DAY_MINUTES);
       motion += dt;
       const target = currentWeather();
@@ -4738,14 +4548,13 @@
   }
 
   function startClock() {
-    if (!frame && !paused && !renderBlocked && !document.hidden) frame = requestAnimationFrame(tick);
+    if (!frame && !paused && !document.hidden) frame = requestAnimationFrame(tick);
   }
 
   function resetClock() {
     if (frame) cancelAnimationFrame(frame);
     frame = 0;
     lastRender = performance.now();
-    nextRender = lastRender + FRAME_INTERVAL;
     startClock();
   }
 
@@ -4765,7 +4574,6 @@
   }
 
   function selectVillage(code) {
-    releaseArtwork(true);
     world = generateWorld(code);
     world.population = createGroundPopulation(world);
     world.flocks = createFlocks(code);
@@ -4784,7 +4592,6 @@
   }
 
   function rebuildSeason() {
-    releaseArtwork(false);
     world.sceneItems = season === 'winter' ? [...world.items, world.festivalTree].sort((a, b) => a.y - b.y) : world.items;
     seasonalColors = Object.fromEntries(Object.entries(colors).map(([phase, base]) =>
       [phase, seasonalPalette(base, phase)]));
@@ -4800,7 +4607,6 @@
   for (const button of document.querySelectorAll('[data-season]')) {
     button.addEventListener('click', () => {
       if (season === button.dataset.season) return;
-      runRendererChange(() => {
       season = button.dataset.season;
       for (const option of document.querySelectorAll('[data-season]')) {
         option.setAttribute('aria-pressed', option === button);
@@ -4809,7 +4615,6 @@
       changeMusicSeason();
       showWeatherNow();
       resetClock();
-      });
     });
   }
 
@@ -4845,15 +4650,15 @@
     }
   }
 
-  byId('regenerate').addEventListener('click', () => runRendererChange(() => selectVillage(freshCode())));
+  byId('regenerate').addEventListener('click', () => selectVillage(freshCode()));
   byId('seed-form').addEventListener('submit', event => {
     event.preventDefault();
     const code = normalizeCode(seedField.value);
-    if (code) runRendererChange(() => selectVillage(code));
+    if (code) selectVillage(code);
   });
   window.addEventListener('hashchange', () => {
     const code = codeFromUrl();
-    if (code !== world?.code) runRendererChange(() => selectVillage(code || freshCode()));
+    if (code !== world.code) selectVillage(code || freshCode());
   });
 
   clock.addEventListener('input', () => {
@@ -4922,14 +4727,12 @@
   for (const button of document.querySelectorAll('[data-render]')) {
     button.addEventListener('click', () => {
       if (renderMode === button.dataset.render) return;
-      runRendererChange(() => {
       renderMode = button.dataset.render;
       try { localStorage.setItem('village-render', renderMode); } catch {}
       configureRenderer();
       rebuildArtwork();
       render();
       resetClock();
-      });
     });
   }
   let resizeTimer;
@@ -4937,100 +4740,15 @@
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       if (desiredRenderScale() === renderScale) return;
-      runRendererChange(() => {
-        configureRenderer();
-        rebuildArtwork();
-        render();
-        resetClock();
-      });
+      configureRenderer();
+      rebuildArtwork();
+      render();
+      resetClock();
     }, 180);
   });
 
-  function artworkSurfaces(includeClouds) {
-    const surfaces = new Set();
-    for (const layer of Object.values(layers || {})) {
-      surfaces.add(layer.terrain);
-      for (const sprite of layer.sprites) surfaces.add(sprite.canvas);
-    }
-    for (const surface of world?.moonMasks || []) surfaces.add(surface);
-    for (const region of world?.foregroundMasks?.values() || []) {
-      surfaces.add(region.canvas); surfaces.add(region.lightCanvas);
-    }
-    for (const surface of world?.festivalTree?.glows || []) surfaces.add(surface);
-    if (includeClouds) for (const layer of world?.cloudLayers || []) if (layer) surfaces.add(layer.canvas);
-    return surfaces;
-  }
-
-  function releaseArtwork(includeClouds) {
-    for (const surface of artworkSurfaces(includeClouds)) releaseSurface(surface);
-    layers = undefined;
-    if (world) {
-      world.moonMasks = [];
-      world.foregroundMasks = new Map();
-      if (world.festivalTree) world.festivalTree.glows = null;
-      if (includeClouds) world.cloudLayers = [];
-    }
-  }
-
-  function isLiveSurface(surface) {
-    return surface === canvas || surface === landCanvas || surface === shadowCanvas || surface === cloudCanvas ||
-      actorSpritePool.some(slot => slot.canvas === surface) || artworkSurfaces(true).has(surface);
-  }
-
-  function runRendererChange(change) {
-    if (recoveryTimer !== null) { clearTimeout(recoveryTimer); recoveryTimer = null; }
-    if (frame) cancelAnimationFrame(frame);
-    frame = 0;
-    renderBlocked = false;
-    canvas.style.visibility = 'hidden';
-    renderStatus.textContent = 'Создаём деревню…';
-    renderStatus.hidden = false;
-    try { change(); } catch (error) { recoverRenderer(error); }
-  }
-
-  function recoverRenderer(error) {
-    if (renderBlocked) return;
-    console.warn('Village rendering interrupted', error);
-    renderBlocked = true;
-    if (frame) cancelAnimationFrame(frame);
-    frame = 0;
-    canvas.style.visibility = 'hidden';
-    renderStatus.hidden = false;
-    if (ui.hidden) toggleInterface();
-    if (recoveryAttempts >= 1) {
-      renderStatus.textContent = 'Изображение остановлено. Попробуйте перезагрузить страницу.';
-      return;
-    }
-    recoveryAttempts++;
-    renderStatus.textContent = 'Восстанавливаем изображение…';
-    let waits = 0;
-    const restore = () => {
-      const lost = [ctx, landContext, shadowContext, cloudContext].some(g => g.isContextLost?.());
-      if (lost) {
-        if (waits++ < 5) { recoveryTimer = setTimeout(restore, 300); return; }
-        recoveryTimer = null;
-        renderStatus.textContent = 'Изображение остановлено. Попробуйте перезагрузить страницу.';
-        return;
-      }
-      recoveryTimer = null;
-      runRendererChange(() => {
-        renderMode = 'pixel';
-        try { localStorage.setItem('village-render', renderMode); } catch {}
-        configureRenderer();
-        if (world?.sceneItems && world?.population && seasonalColors) {
-          rebuildArtwork();
-          showWeatherNow();
-          resetClock();
-        } else selectVillage(codeFromUrl() || freshCode());
-      });
-    };
-    recoveryTimer = setTimeout(restore, 300);
-  }
-
-  runRendererChange(() => {
-    configureRenderer();
-    selectVillage(codeFromUrl() || freshCode());
-  });
+  configureRenderer();
+  selectVillage(codeFromUrl() || freshCode());
 })();
 </script>
 </body>
